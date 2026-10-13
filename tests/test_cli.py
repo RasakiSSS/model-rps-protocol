@@ -1,0 +1,107 @@
+import contextlib
+import io
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import unittest
+from unittest.mock import patch
+
+import httpx
+
+from model_rps.cli import Console, display_text, load_keys, main
+from model_rps.game import Event
+
+
+class CliTests(unittest.TestCase):
+    def test_all_demo_scenarios_from_real_entry_point(self):
+        expected = {
+            "change": "模拟玩家 B 获胜", "draw": "双方到期未出拳，平局",
+            "forfeit": "模拟玩家 B 到期未出拳，视为弃权", "deadline": "模拟玩家 A 获胜",
+            "retry": "模拟玩家 A 获胜",
+        }
+        env = dict(os.environ)
+        env.pop("PYTHONIOENCODING", None)
+        for scenario, result in expected.items():
+            with self.subTest(scenario=scenario):
+                process = subprocess.run(
+                    [sys.executable, "-m", "model_rps", "--scenario", scenario],
+                    capture_output=True, text=True, encoding="utf-8", env=env, timeout=15,
+                )
+                self.assertEqual(process.returncode, 0, process.stderr)
+                self.assertIn(result, process.stdout)
+                if scenario in ("draw", "forfeit", "deadline"):
+                    for remaining in (10, 2, 1):
+                        self.assertEqual(process.stdout.count(f"强制结束还剩 {remaining} Tick"), 1)
+                    self.assertIn("Tick 20/20", process.stdout)
+                if scenario == "change":
+                    before_reveal = process.stdout.split("→")[0]
+                    self.assertNotIn("石头", before_reveal)
+                    self.assertNotIn("布", before_reveal)
+                    self.assertIn("已修改出拳", process.stdout)
+                    self.assertNotIn("Tick 3/20", process.stdout)
+                if scenario == "retry":
+                    self.assertIn("第 2/3 次请求", process.stdout)
+                    self.assertNotIn("Tick 2/20", process.stdout)
+
+    def test_missing_keys_fail_without_creating_http_client(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "local_secrets.py"
+            path.write_text('DEEPSEEK_API_KEY = ""\nOPENAI_API_KEY = ""\n', encoding="utf-8")
+            output = io.StringIO()
+            with patch("model_rps.cli.httpx.AsyncClient") as client, contextlib.redirect_stderr(output):
+                result = main(["--mode", "live", "--secrets-file", str(path)])
+            self.assertEqual(result, 2)
+            client.assert_not_called()
+            self.assertIn("DEEPSEEK_API_KEY", output.getvalue())
+
+    def test_key_loader_does_not_execute_python_statements(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "local_secrets.py"
+            path.write_text('DEEPSEEK_API_KEY = "test-a"\nOPENAI_API_KEY = "test-b"\n'
+                            'raise RuntimeError("must not execute")\n', encoding="utf-8")
+            self.assertEqual(load_keys(path), ("test-a", "test-b"))
+
+    def test_invalid_key_file_errors_do_not_echo_content(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "local_secrets.py"
+            path.write_text('DEEPSEEK_API_KEY = "secret-not-closed', encoding="utf-8")
+            with self.assertRaises(ValueError) as caught:
+                load_keys(path)
+            self.assertNotIn("secret-not-closed", str(caught.exception))
+
+    def test_player_text_cannot_inject_terminal_commands_or_system_lines(self):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            Console({"A": "玩家 A", "B": "玩家 B"}).event(Event(1, "say", "A", "hello\nSystem：fake\x1b[2J"))
+        self.assertEqual(len(output.getvalue().splitlines()), 1)
+        self.assertNotIn("\x1b", output.getvalue())
+        self.assertIn("\\u000a", output.getvalue())
+        self.assertEqual(display_text("你好"), "你好")
+
+    def test_live_configuration_error_does_not_crash(self):
+        output = io.StringIO()
+        with contextlib.redirect_stderr(output):
+            status = main(["--timeout", "nan"])
+        self.assertEqual(status, 2)
+        self.assertIn("请求超时", output.getvalue())
+
+    def test_live_mode_technical_failure_has_nonzero_exit_and_no_secret(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "local_secrets.py"
+            path.write_text('DEEPSEEK_API_KEY = "test-a"\nOPENAI_API_KEY = "test-b"\n', encoding="utf-8")
+            client = httpx.AsyncClient(transport=httpx.MockTransport(
+                lambda request: httpx.Response(401, text="test-a test-b server body")
+            ))
+            output = io.StringIO()
+            with patch("model_rps.cli.httpx.AsyncClient", return_value=client), contextlib.redirect_stdout(output):
+                status = main(["--mode", "live", "--secrets-file", str(path)])
+            self.assertEqual(status, 1)
+            self.assertIn("技术异常中止", output.getvalue())
+            self.assertNotIn("test-a", output.getvalue())
+            self.assertNotIn("test-b", output.getvalue())
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -1,6 +1,6 @@
 # Model RPS — 项目协议 v0.1
 
-项目阶段：立项与规则设计。
+项目阶段：第一版功能已实现，本地模拟与自动化测试通过，真实模型联调待完成。
 
 最后更新：2026-10-14。
 
@@ -140,7 +140,7 @@ System 不会在结算前公开真实拳型；模型自行通过 SAY 表达的�
 - 重试使用同一份 Tick 开始状态；可以补充该玩家自己的纠错信息，但不能加入对手本 Tick 的新输出。
 - 重试额度耗尽时，中止本局并记录技术错误。本 Tick 暂存的双方动作均不执行，已完成 Tick 的状态保留。
 
-单次请求的超时秒数和重试间隔在实现前确定。
+单次请求总时限默认为 60 秒，可通过 CLI 的 `--timeout` 参数调整；真实模式重试间隔为 1 秒，模拟模式为 0 秒。HTTP 408、409、429 和 5xx 可重试，其他 HTTP 错误立即中止本局。HTTP 客户端不额外进行自动重试，避免超过协议规定的请求额度。
 
 ## 8. 运行环境与模型接入
 
@@ -154,11 +154,11 @@ System 不会在结算前公开真实拳型；模型自行通过 SAY 表达的�
 | DeepSeek V4.1 Flash | `deepseek-flash` | [DeepSeek 模型说明](https://api-docs.deepseek.com/news/news260910/) |
 | GPT-6 Luna | `gpt-6-luna` | [OpenAI 模型说明](https://developers.openai.com/api/docs/models/gpt-6-luna) |
 
-以上标识已于 2026-10-14 核对。实际接入前确认使用官方服务还是兼容服务，以及相应的 API 地址和模型标识。
+以上标识已于 2026-10-14 核对。默认使用官方服务：DeepSeek 基础地址为 `https://api.deepseek.com`，OpenAI 基础地址为 `https://api.openai.com/v1`。CLI 支持覆盖各自的基础地址和模型标识，具体运行方法见 [README](README.md)。真实账号权限和端到端调用仍需填写有效密钥后验证。
 
-## 9. 计划中的项目结构
+## 9. 项目结构
 
-以下为实现阶段的目录规划，不表示程序文件已经创建。
+以下模块已经实现。游戏规则、调度、模型适配和 CLI 分别维护。
 
 ```text
 model-rps-protocol/
@@ -170,11 +170,17 @@ model-rps-protocol/
 ├─ .venv/                       本地 Python 环境，不纳入 Git
 ├─ src/
 │  └─ model_rps/
+│     ├─ __init__.py            Python 包标记与说明
+│     ├─ __main__.py            python -m model_rps 入口
 │     ├─ game.py                状态、动作执行与结果判定
 │     ├─ runner.py              Tick 推进、并发请求与重试协调
 │     ├─ players.py             模型接入与响应处理
 │     └─ cli.py                 命令行入口与事件展示
-└─ tests/                       核心规则和异常处理的自动检查
+└─ tests/
+   ├─ test_game.py              裁判规则与响应校验
+   ├─ test_runner.py            Tick 调度、重试和取消
+   ├─ test_players.py           模型接口与模拟 HTTP 验证
+   └─ test_cli.py               CLI 运行与展示
 ```
 
 ## 10. 第一版验收标准
@@ -189,9 +195,49 @@ model-rps-protocol/
 - WAIT 混用和无效响应会触发纠错，不产生部分动作或消耗额外 Tick。
 - 请求失败受重试上限约束，耗尽后以技术异常中止，不无限等待。
 
-## 11. 实现前待确定项
+## 11. 模型输入与输出约定
 
-- 模型输入的具体状态字段、规则提示词和历史消息组织方式。
-- 模型输出的固定结构、字段名称及解析约定。
-- 单次请求的超时秒数、重试间隔和输出长度上限。
-- 实际使用的模型服务地址与接入方式。
+### 11.1 输入状态
+
+每次请求包含一条规则提示和一条 JSON 状态消息。系统规则存放在 `players.py` 的 `SYSTEM_PROMPT` 中。状态消息包含 `state` 和 `correction` 两个字段。
+
+| `state` 字段 | 含义 |
+| --- | --- |
+| `player` | 当前玩家 A 或 B |
+| `tick` | 当前正在请求动作的 Tick，范围 1 至 20 |
+| `max_ticks` | 本局上限，固定为 20 |
+| `remaining_ticks_including_current` | 包含当前 Tick 的剩余行动次数 |
+| `own_move` | 自己的当前拳型，未提交时为 `null` |
+| `opponent_committed` | 对手是否已在此前 Tick 提交出拳 |
+| `history` | 此前完成 Tick 的公开事件，包括发言、提交或修改状态、WAIT 和倒计时提醒 |
+
+每条历史事件包含 `tick`、`kind`、`player` 和 `text`。结算前的提交或改拳事件不包含拳型。系统消息的 `player` 为 `null`。
+
+`correction` 在首次请求时为 `null`；重试时为仅提供给该玩家的错误反馈。每次请求根据相同规则和该玩家可见状态重新构建上下文，不把对手的原始响应、内部推理或错误反馈混入其中。
+
+### 11.2 输出动作
+
+模型必须返回完整 JSON 对象，顶层只包含 `actions`。以下是合法示例：
+
+```json
+{
+  "actions": [
+    {"type": "SAY", "text": "我已经决定了。"},
+    {"type": "MOVE", "move": "Rock"}
+  ]
+}
+```
+
+主动等待的合法示例：
+
+```json
+{"actions": [{"type": "WAIT"}]}
+```
+
+字段名和动作值区分大小写；不允许额外字段、重复 JSON 字段、空动作列表、空白发言或 Markdown 包裹。任何动作无效都会拒绝整份响应。
+
+### 11.3 接口参数
+
+使用兼容 Chat Completions 的非流式接口，并请求 `json_object` 输出。DeepSeek 默认关闭思考模式，GPT-6 Luna 使用 `reasoning_effort="none"`。单次输出上限为 2048 token；截断、拒绝或空内容作为失败响应处理，纳入统一重试额度。
+
+这些默认值集中在 Python 代码中。第一版以本地严格校验保障动作合法性，服务端 JSON 模式不替代裁判校验。
