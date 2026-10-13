@@ -1,6 +1,6 @@
 # Model RPS — 项目协议 v0.1
 
-项目阶段：第一版功能已实现，本地模拟与自动化测试通过，真实模型联调待完成。
+项目阶段：第一版功能已实现，本地模拟、自动化测试和首局真实模型联调均已通过。
 
 最后更新：2026-10-14。
 
@@ -149,12 +149,12 @@ System 不会在结算前公开真实拳型；模型自行通过 SAY 表达的�
 - 首版允许在本地 Python 文件中填写 API key，集中放在 `local_secrets.py`，并通过 `.gitignore` 排除该文件。
 - `.venv`、本地密钥和 Python 生成文件不纳入 Git 版本管理。
 
-| 模型 | 官方 API 模型标识 | 官方资料 |
+| 模型 | 当前兼容服务的模型标识 | 模型官方资料 |
 | --- | --- | --- |
-| DeepSeek V4.1 Flash | `deepseek-flash` | [DeepSeek 模型说明](https://api-docs.deepseek.com/news/news260910/) |
+| DeepSeek V4.1 Flash | `deepseek-v4.1-flash` | [DeepSeek 模型说明](https://api-docs.deepseek.com/news/news260910/) |
 | GPT-6 Luna | `gpt-6-luna` | [OpenAI 模型说明](https://developers.openai.com/api/docs/models/gpt-6-luna) |
 
-以上标识已于 2026-10-14 核对。默认使用官方服务：DeepSeek 基础地址为 `https://api.deepseek.com`，OpenAI 基础地址为 `https://api.openai.com/v1`。CLI 支持覆盖各自的基础地址和模型标识，具体运行方法见 [README](README.md)。真实账号权限和端到端调用仍需填写有效密钥后验证。
+两个玩家均使用用户指定的兼容服务 `https://ai.yuhuantin.icu/v1`，各自使用本地文件中的对应密钥。以上标识已于 2026-10-14 通过该服务的 `/models` 接口核对；DeepSeek 在此服务上的标识与官方接口标识不同。CLI 支持覆盖各自的基础地址和模型标识，具体运行方法见 [README](README.md)。
 
 ## 9. 项目结构
 

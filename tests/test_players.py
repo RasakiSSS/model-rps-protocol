@@ -30,12 +30,12 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
             openai = ChatCompletionPlayer(client, OPENAI, "test-openai-key")
             await deepseek.respond(state.view_for("A"), "仅 A 的纠错信息")
             await openai.respond(state.view_for("B"))
-        self.assertEqual(str(requests[0].url), "https://api.deepseek.com/chat/completions")
-        self.assertEqual(str(requests[1].url), "https://api.openai.com/v1/chat/completions")
+        self.assertEqual(str(requests[0].url), "https://ai.yuhuantin.icu/v1/chat/completions")
+        self.assertEqual(str(requests[1].url), "https://ai.yuhuantin.icu/v1/chat/completions")
         self.assertEqual(requests[0].headers["authorization"], "Bearer test-deepseek-key")
         self.assertEqual(requests[1].headers["authorization"], "Bearer test-openai-key")
         a, b = [json.loads(request.content) for request in requests]
-        self.assertEqual(a["model"], "deepseek-flash")
+        self.assertEqual(a["model"], "deepseek-v4.1-flash")
         self.assertEqual(a["thinking"], {"type": "disabled"})
         self.assertEqual(a["max_tokens"], 2048)
         self.assertNotIn("max_completion_tokens", a)
@@ -102,14 +102,14 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
                 self.assertNotIn("sensitive", str(caught.exception))
 
     async def test_http_and_format_retries_share_budget_in_complete_game(self):
-        counts = {"deepseek-flash": 0, "gpt-6-luna": 0}
+        counts = {"deepseek-v4.1-flash": 0, "gpt-6-luna": 0}
         a_contexts = []
 
         def handler(request):
             body = json.loads(request.content)
             model = body["model"]
             counts[model] += 1
-            if model == "deepseek-flash":
+            if model == "deepseek-v4.1-flash":
                 a_contexts.append(json.loads(body["messages"][1]["content"]))
                 if counts[model] == 1:
                     return httpx.Response(429)
@@ -126,7 +126,7 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
             )
         self.assertEqual(state.result.reason, EndReason.SHOWDOWN)
         self.assertEqual(state.result.winner, "A")
-        self.assertEqual(counts, {"deepseek-flash": 3, "gpt-6-luna": 1})
+        self.assertEqual(counts, {"deepseek-v4.1-flash": 3, "gpt-6-luna": 1})
         self.assertTrue(all(context["state"] == a_contexts[0]["state"] for context in a_contexts))
         self.assertIn("HTTP 429", a_contexts[1]["correction"])
         self.assertIn("actions", a_contexts[2]["correction"])

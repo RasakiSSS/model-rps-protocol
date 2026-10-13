@@ -54,9 +54,9 @@ class ModelSpec:
     extra_body: dict = field(default_factory=dict)
 
 
-DEEPSEEK = ModelSpec("DeepSeek V4.1 Flash", "deepseek-flash", "https://api.deepseek.com",
+DEEPSEEK = ModelSpec("DeepSeek V4.1 Flash", "deepseek-v4.1-flash", "https://ai.yuhuantin.icu/v1",
                      "max_tokens", {"thinking": {"type": "disabled"}})
-OPENAI = ModelSpec("GPT-6 Luna", "gpt-6-luna", "https://api.openai.com/v1",
+OPENAI = ModelSpec("GPT-6 Luna", "gpt-6-luna", "https://ai.yuhuantin.icu/v1",
                    "max_completion_tokens", {"reasoning_effort": "none"})
 
 

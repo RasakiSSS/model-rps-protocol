@@ -8,7 +8,9 @@
 
 ## 当前进度
 
-裁判规则、Tick 并发调度、响应校验与重试、模拟玩家、模型适配器和 CLI 均已实现。本地自动化测试与模拟对局已通过。真实服务的账号权限、模型可用性和端到端调用仍需填写 API key 后验证。
+裁判规则、Tick 并发调度、响应校验与重试、模拟玩家、模型适配器和 CLI 均已实现。本地 37 项自动化测试与模拟对局已通过，首局真实模型联调也已完成。
+
+2026-10-14 联调结果：通过下方指定的兼容服务，双方在第 1 Tick 提交出拳；DeepSeek V4.1 Flash 出布，GPT-6 Luna 出石头，裁判判定 DeepSeek 获胜。对局未触发重试，程序正常退出。
 
 ## 安装与首次运行
 
@@ -56,8 +58,10 @@ OPENAI_API_KEY = "你的 OpenAI API key"
 
 | 玩家 | 默认 API 基础地址 | 默认模型标识 |
 | --- | --- | --- |
-| A | `https://api.deepseek.com` | `deepseek-flash` |
-| B | `https://api.openai.com/v1` | `gpt-6-luna` |
+| A | `https://ai.yuhuantin.icu/v1` | `deepseek-v4.1-flash` |
+| B | `https://ai.yuhuantin.icu/v1` | `gpt-6-luna` |
+
+默认地址为本项目选用的兼容服务。2026-10-14 已通过该服务的 `/models` 接口核对两个密钥的鉴权和以上模型标识；每个玩家分别使用自己的密钥。
 
 程序自动在基础地址后追加 `/chat/completions`。可以通过 `--deepseek-base-url`、`--openai-base-url`、`--deepseek-model`、`--openai-model` 覆盖地址或模型标识。覆盖模型名称仍使用该玩家的参数方案；适配不兼容的模型时，需要在 `players.py` 中调整 `ModelSpec` 或新增实现 `Player.respond` 的适配器。
 
