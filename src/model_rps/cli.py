@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import ast
 import asyncio
+import json
 import sys
 import unicodedata
 from dataclasses import replace
@@ -17,6 +18,7 @@ from .diagnostics import LogError
 from .logs import RunLogs
 from .match import MatchConfig, MatchStatus, run_match
 from .players import ChatCompletionPlayer, DEEPSEEK, OPENAI, demo_players
+from .postmatch import MatchArchive, run_reviews
 from .runner import RequestPolicy
 
 GESTURE_NAMES = {"Rock": "石头", "Paper": "布", "Scissors": "剪刀"}
@@ -45,7 +47,10 @@ class Console:
         self.tick = event.tick
         name = self.names.get(event.player, "System")
         if event.kind == "tick":
-            self.write(f"\n── Tick {event.tick}/{MAX_TICKS} ──")
+            if event.text == "settlement":
+                self.write(f"\n── 结算 Tick {event.tick}（最后一次行动机会）──")
+            else:
+                self.write(f"\n── Tick {event.tick}/{MAX_TICKS} ──")
         elif event.kind == "say":
             self.write(f"{name}：{display_text(event.text)}")
         elif event.kind in ("commit", "revise"):
@@ -57,7 +62,7 @@ class Console:
             self.write(f"System：{name} → {GESTURE_NAMES[event.text]}")
         elif event.kind in ("retry", "error"):
             self.write(f"System：{name}，{display_text(event.text)}")
-        elif event.kind == "reminder":
+        elif event.kind in ("reminder", "settlement_pending"):
             self.write(f"System：{event.text}")
 
     def result(self, state: GameState) -> None:
@@ -106,7 +111,7 @@ def make_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Model RPS：两个独立模型的猜拳博弈")
     parser.add_argument("--mode", choices=("demo", "live"), default="live",
                         help="live 真实模型（默认）；demo 模拟对局")
-    parser.add_argument("--scenario", choices=("change", "draw", "forfeit", "deadline", "retry"),
+    parser.add_argument("--scenario", choices=("change", "settlement", "draw", "forfeit", "deadline", "retry"),
                         default="change", help="模拟场景，默认演示改拳")
     parser.add_argument("--secrets-file", type=Path, default=Path("local_secrets.py"), help="本地密钥文件路径")
     parser.add_argument("--timeout", type=float, default=RequestPolicy().timeout, help="每次请求的总超时秒数")
@@ -127,6 +132,8 @@ async def play(args: argparse.Namespace) -> int:
 
     async def execute(factory, names, logs):
         console = Console(names, logs)
+        players = factory()
+        archive = MatchArchive()
         print(f"日志目录：{display_text(str(logs.path.resolve()))}", flush=True)
         console.write(f"System：{'模拟' if args.mode == 'demo' else '真实模型'}比赛 BO{config.best_of}，"
                       f"先胜 {config.target_wins} 局；实际最多 {config.max_games} 局。")
@@ -140,15 +147,20 @@ async def play(args: argparse.Namespace) -> int:
             logs.lifecycle("game_start", game=number)
 
         def end(number, state, wins, draws):
+            archive.finish_game(number, state)
             console.result(state)
             console.write(f"System：比分 A {wins[0]} : {wins[1]} B；平局 {draws} 局。")
             logs.lifecycle("game_end", game=number, reason=state.result.reason,
                            winner=state.result.winner, wins=wins, draws=draws,
                            completed_ticks=state.completed_ticks)
 
-        result = await run_match(factory, config=config, policy=policy, on_start=start,
+        def request(number, record):
+            logs.request(number, record)
+            archive.request(number, record)
+
+        result = await run_match(lambda: players, config=config, policy=policy, on_start=start,
                                  on_event=lambda number, event: console.event(event),
-                                 on_request=logs.request, on_end=end)
+                                 on_request=request, on_end=end)
         if result.status == MatchStatus.WON:
             console.write(f"System：比赛结束，{console.names[result.winner]} 赢得 BO{config.best_of}。")
         elif result.status == MatchStatus.UNDECIDED:
@@ -157,6 +169,37 @@ async def play(args: argparse.Namespace) -> int:
             console.write("System：技术异常中止整场比赛，保留此前比分。")
         logs.lifecycle("match_end", status=result.status, winner=result.winner,
                        wins=result.wins, draws=result.draws, games_played=result.games_played)
+        if result.status != MatchStatus.TECHNICAL_ERROR:
+            report = logs.redact_value(archive.report(config, result))
+            console.game, console.tick = 0, 0
+            console.write("\nSystem：赛后公开双方决策说明（按局号、Tick 和玩家排列）。")
+            logs.lifecycle("postmatch_disclosure_start")
+            for game in report["games"]:
+                for decision in game["decisions"]:
+                    console.game, console.tick = decision["game"], decision["tick"]
+                    label = f"第 {console.game} 局 Tick {console.tick} {console.names[decision['player']]}"
+                    actions = json.dumps(decision["actions"], ensure_ascii=False)
+                    console.write(f"{label}｜动作：{display_text(actions)}｜说明：{display_text(decision['summary'])}")
+            console.game, console.tick = 0, 0
+            console.write("\nSystem：赛后复盘开始，双方各自分析完整记录。")
+            logs.lifecycle("review_start")
+            outcomes = await run_reviews(players, report, policy=policy,
+                                         on_request=lambda record: logs.request(0, record))
+            for outcome in outcomes:
+                name = console.names[outcome.player]
+                if outcome.review is None:
+                    console.write(f"System：{name}，{display_text(outcome.error)}")
+                    continue
+                for label, text in (("整体评价", outcome.review.assessment),
+                                    ("关键决策", outcome.review.key_moments),
+                                    ("改进建议", outcome.review.improvements)):
+                    console.write(f"{name} 复盘·{label}：{display_text(text)}")
+            complete = all(outcome.review is not None for outcome in outcomes)
+            logs.lifecycle("review_end", complete=complete,
+                           players={outcome.player: "complete" if outcome.review else "failed" for outcome in outcomes})
+            console.write("System：赛后复盘结束。" if complete else "System：赛后复盘部分未完成，已保存成功结果。")
+            if not complete:
+                return 4
         return {MatchStatus.WON: 0, MatchStatus.UNDECIDED: 3, MatchStatus.TECHNICAL_ERROR: 1}[result.status]
 
     if args.mode == "demo":
@@ -192,7 +235,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"配置错误：{exc}", file=sys.stderr)
         return 2
     except KeyboardInterrupt:
-        print("\nSystem：用户中止对局。", file=sys.stderr)
+        print("\nSystem：用户中止运行。", file=sys.stderr)
         return 130
 
 

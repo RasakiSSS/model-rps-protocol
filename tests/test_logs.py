@@ -43,14 +43,17 @@ class LogTests(unittest.TestCase):
             self.assertNotIn("第 3 局开始", chat)
             self.assertIn("比分 A 0 : 2 B", chat)
             self.assertIn("赢得 BO3", chat)
-            self.assertNotIn("预设动作", chat)
+            self.assertNotIn("预设动作", chat.split("赛后公开")[0])
+            self.assertIn("预设动作", chat.split("赛后公开")[1])
+            self.assertIn("赛后复盘结束", chat)
             for player in ("a", "b"):
                 debug = records(root / f"player_{player}/debug.log")
                 result = next(r for r in debug if r["kind"] == "match_end")
                 self.assertEqual(result["wins"], [0, 2])
                 self.assertEqual(result["games_played"], 2)
                 thought = records(root / f"player_{player}/thought.log")
-                self.assertEqual({r["game"] for r in thought}, {1, 2})
+                self.assertEqual({r["game"] for r in thought if r["kind"] == "decision"}, {1, 2})
+                self.assertEqual(len([r for r in thought if r["kind"] == "review"]), 1)
                 self.assertTrue(all(r["player"] == player.upper() for r in thought))
 
     def test_unique_directories_flush_and_redact_both_keys(self):
@@ -95,7 +98,7 @@ class LogTests(unittest.TestCase):
                 status = main(["--mode", "demo", "--scenario", "draw", "--bo", "3", "--max-games", "2", "--log-dir", directory])
             self.assertEqual(status, 3)
             self.assertIn("比赛未决", output.getvalue())
-            self.assertEqual(output.getvalue().count("本局强制结束还剩 10 Tick"), 2)
+            self.assertEqual(output.getvalue().count("本局提交截止还剩 10 Tick"), 2)
             for options in (["--bo", "2"], ["--bo", "3", "--max-games", "1"]):
                 with contextlib.redirect_stderr(io.StringIO()):
                     self.assertEqual(main([*options, "--log-dir", directory]), 2)
@@ -132,16 +135,17 @@ class AsyncLogTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(state.result.winner, "A")
                 a = records(logs.path / "player_a/debug.log")
                 b = records(logs.path / "player_b/debug.log")
-                self.assertEqual([r["attempt"] for r in a if r["kind"] == "request_start"], [1, 2, 3])
-                self.assertEqual([r["attempt"] for r in b if r["kind"] == "request_start"], [1])
-                self.assertEqual([r["status"] for r in a if r["kind"] == "http_response"], [429, 200, 200])
-                self.assertTrue(all(r["game"] == 1 and r["tick"] == 1 and r["player"] == "A" for r in a))
+                self.assertEqual([(r["tick"], r["attempt"]) for r in a if r["kind"] == "request_start"],
+                                 [(1, 1), (1, 2), (1, 3), (2, 1)])
+                self.assertEqual([(r["tick"], r["attempt"]) for r in b if r["kind"] == "request_start"], [(1, 1), (2, 1)])
+                self.assertEqual([r["status"] for r in a if r["kind"] == "http_response"], [429, 200, 200, 200])
+                self.assertTrue(all(r["game"] == 1 and r["tick"] in (1, 2) and r["player"] == "A" for r in a))
                 self.assertTrue(all(r["elapsed_seconds"] >= 0 for r in a if r["kind"] == "request_end"))
                 self.assertEqual([r["usage"] for r in b if r["kind"] == "usage"],
-                                 [{"prompt_tokens": 100, "completion_tokens": 25}])
+                                 [{"prompt_tokens": 100, "completion_tokens": 25}] * 2)
                 self.assertIn("decision_summary", next(r for r in a if r["kind"] == "request_start" and r["attempt"] == 3)["correction"])
                 thoughts = records(logs.path / "player_a/thought.log")
-                self.assertEqual([r["kind"] for r in thoughts], ["no_decision", "no_decision", "decision"])
+                self.assertEqual([r["kind"] for r in thoughts], ["no_decision", "no_decision", "decision", "decision"])
                 self.assertEqual(thoughts[-1]["summary"], "PRIVATE-DECISION")
                 chat = (logs.path / "chat.log").read_text(encoding="utf-8")
                 self.assertNotIn("PRIVATE-DECISION", chat)

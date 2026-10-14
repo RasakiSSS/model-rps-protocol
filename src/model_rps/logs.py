@@ -45,19 +45,19 @@ class RunLogs:
         except (OSError, UnicodeError):
             raise LogError("日志写入失败，比赛已停止。") from None
 
-    def _json(self, key, record: dict) -> None:
-        def clean(value):
-            if isinstance(value, str):
-                return self.redact(value)
-            if isinstance(value, dict):
-                return {self.redact(k): clean(v) for k, v in value.items()}
-            if isinstance(value, (tuple, list)):
-                return [clean(item) for item in value]
-            return value
+    def redact_value(self, value):
+        if isinstance(value, str):
+            return self.redact(value)
+        if isinstance(value, dict):
+            return {self.redact(k): self.redact_value(v) for k, v in value.items()}
+        if isinstance(value, (tuple, list)):
+            return [self.redact_value(item) for item in value]
+        return value
 
+    def _json(self, key, record: dict) -> None:
         record = {"timestamp": datetime.now().astimezone().isoformat(timespec="milliseconds"), **record}
         # 先脱敏再编码，包含引号或反斜杠的密钥也不会破坏 JSON 行。
-        self._write(key, json.dumps(clean(record), ensure_ascii=False))
+        self._write(key, json.dumps(self.redact_value(record), ensure_ascii=False))
 
     def chat(self, text: str, *, game: int = 0, tick: int = 0) -> None:
         timestamp = datetime.now().astimezone().isoformat(timespec="milliseconds")
@@ -67,7 +67,11 @@ class RunLogs:
     def request(self, game: int, record: dict) -> None:
         player = record["player"]
         entry = {"game": game, **record}
-        if record["kind"] == "decision":
+        if record.get("phase") == "review":
+            self._json((player, "debug"), entry)
+            if record["kind"] == "review":
+                self._json((player, "thought"), entry)
+        elif record["kind"] == "decision":
             self._json((player, "thought"), entry)
         else:
             self._json((player, "debug"), entry)

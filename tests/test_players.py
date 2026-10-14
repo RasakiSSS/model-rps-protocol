@@ -37,11 +37,11 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
         a, b = [json.loads(request.content) for request in requests]
         self.assertEqual(a["model"], "deepseek-flash")
         self.assertEqual(a["thinking"], {"type": "disabled"})
-        self.assertEqual(a["max_tokens"], 15000)
+        self.assertEqual(a["max_tokens"], 20000)
         self.assertNotIn("max_completion_tokens", a)
         self.assertEqual(b["model"], "gpt-6-luna")
         self.assertEqual(b["reasoning_effort"], "none")
-        self.assertEqual(b["max_completion_tokens"], 15000)
+        self.assertEqual(b["max_completion_tokens"], 20000)
         self.assertNotIn("max_tokens", b)
         for payload in (a, b):
             self.assertFalse(payload["stream"])
@@ -126,8 +126,9 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
             )
         self.assertEqual(state.result.reason, EndReason.SHOWDOWN)
         self.assertEqual(state.result.winner, "A")
-        self.assertEqual(counts, {"deepseek-flash": 3, "gpt-6-luna": 1})
-        self.assertTrue(all(context["state"] == a_contexts[0]["state"] for context in a_contexts))
+        self.assertEqual(counts, {"deepseek-flash": 4, "gpt-6-luna": 2})
+        self.assertTrue(all(context["state"] == a_contexts[0]["state"] for context in a_contexts[:3]))
+        self.assertTrue(a_contexts[-1]["state"]["is_settlement_tick"])
         self.assertIn("HTTP 429", a_contexts[1]["correction"])
         self.assertIn("actions", a_contexts[2]["correction"])
 

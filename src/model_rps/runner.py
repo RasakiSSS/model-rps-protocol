@@ -50,7 +50,8 @@ async def _request_actions(player: Player, view: PlayerView, policy: RequestPoli
                     raw = await player.respond(view, feedback)
                 trace("raw_response", content=raw)
                 decision = parse_decision(raw)
-                trace("decision", summary=decision.summary, status="validated")
+                trace("decision", summary=decision.summary, status="validated",
+                      actions=[action.to_dict() for action in decision.actions])
                 trace("request_end", status="valid", elapsed_seconds=perf_counter() - started)
                 return decision.actions
             except LogError:
@@ -94,7 +95,7 @@ async def run_game(a: Player, b: Player, *, policy: RequestPolicy | None = None,
     state = GameState()
     while state.result is None:
         views = (state.view_for("A"), state.view_for("B"))
-        emit(Event(views[0].tick, "tick"))
+        emit(Event(views[0].tick, "tick", text="settlement" if views[0].is_settlement_tick else ""))
         tasks = [asyncio.create_task(_request_actions(player, view, policy, emit, on_request))
                  for player, view in zip((a, b), views)]
         try:

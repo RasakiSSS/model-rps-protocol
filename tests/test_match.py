@@ -25,8 +25,8 @@ class MatchTests(unittest.IsolatedAsyncioTestCase):
                 players = []
 
                 def factory():
-                    pair = (ScriptedPlayer([move("Paper")] * (bo // 2 + 1)),
-                            ScriptedPlayer([move("Rock")] * (bo // 2 + 1)))
+                    pair = (ScriptedPlayer([move("Paper"), WAIT_RESPONSE] * (bo // 2 + 1)),
+                            ScriptedPlayer([move("Rock"), WAIT_RESPONSE] * (bo // 2 + 1)))
                     players.append(pair)
                     return pair
 
@@ -35,17 +35,18 @@ class MatchTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(result.wins, (bo // 2 + 1, 0))
                 self.assertEqual(len(players), 1)
                 for player in players[0]:
-                    self.assertEqual(len(player.requests), bo // 2 + 1)
+                    self.assertEqual(len(player.requests), 2 * (bo // 2 + 1))
                     self.assertTrue(all(view.tick == 1 and view.own_move is None and not view.history
-                                        for view, feedback in player.requests))
+                                        for view, feedback in player.requests[::2]))
+                    self.assertTrue(all(view.is_settlement_tick for view, _ in player.requests[1::2]))
                     self.assertEqual(player.game_contexts[-1]["wins"], {"A": bo // 2, "B": 0})
 
     async def test_draws_do_not_score_and_last_allowed_game_can_win(self):
         outcomes = [("Rock", "Rock"), ("Rock", "Paper"), ("Paper", "Rock"), ("Rock", "Paper")]
 
         def factory():
-            return (ScriptedPlayer([move(a) for a, b in outcomes]),
-                    ScriptedPlayer([move(b) for a, b in outcomes]))
+            return (ScriptedPlayer([response for a, b in outcomes for response in (move(a), WAIT_RESPONSE)]),
+                    ScriptedPlayer([response for a, b in outcomes for response in (move(b), WAIT_RESPONSE)]))
 
         result = await run_match(factory, config=MatchConfig(3, 4), policy=FAST)
         self.assertEqual(result.status, MatchStatus.WON)
@@ -59,8 +60,8 @@ class MatchTests(unittest.IsolatedAsyncioTestCase):
         def factory():
             nonlocal count
             count += 1
-            return (ScriptedPlayer([move("Paper"), move("Rock"), move("Rock")]),
-                    ScriptedPlayer([move("Rock")] * 3))
+            return (ScriptedPlayer([move("Paper"), WAIT_RESPONSE] + [move("Rock"), WAIT_RESPONSE] * 2),
+                    ScriptedPlayer([move("Rock"), WAIT_RESPONSE] * 3))
 
         result = await run_match(factory, config=MatchConfig(3, 3), policy=FAST)
         self.assertEqual(result.status, MatchStatus.UNDECIDED)
@@ -114,17 +115,22 @@ class MatchTests(unittest.IsolatedAsyncioTestCase):
 
             result = await run_match(factory, config=MatchConfig(5), policy=FAST)
             self.assertEqual(result.wins, (3, 0))
-            self.assertEqual(counts, {DEEPSEEK.model: 4, OPENAI.model: 3})
+            self.assertEqual(counts, {DEEPSEEK.model: 7, OPENAI.model: 6})
             for payload, context in requests:
-                self.assertEqual(context["state"]["tick"], 1)
-                self.assertEqual(context["state"]["history"], [])
-                self.assertIsNone(context["state"]["own_move"])
-                self.assertFalse(context["state"]["opponent_committed"])
+                if context["state"]["tick"] == 1:
+                    self.assertEqual(context["state"]["history"], [])
+                    self.assertIsNone(context["state"]["own_move"])
+                    self.assertFalse(context["state"]["opponent_committed"])
+                else:
+                    self.assertEqual(context["state"]["tick"], 2)
+                    self.assertTrue(context["state"]["is_settlement_tick"])
+                    self.assertTrue(context["state"]["opponent_committed"])
                 opponent = OPENAI.model if payload["model"] == DEEPSEEK.model else DEEPSEEK.model
                 self.assertNotIn(f"PRIVATE-{opponent}", json.dumps(payload))
                 if context["match"]["game"] == 1:
                     self.assertIsNone(context["match"]["last_game"])
-                    self.assertNotIn(f"PUBLIC-{opponent}", json.dumps(payload))
+                    if context["state"]["tick"] == 1:
+                        self.assertNotIn(f"PUBLIC-{opponent}", json.dumps(payload))
                 else:
                     self.assertGreater(len(payload["messages"]), 2)
                     self.assertIn(f"PRIVATE-{payload['model']}", json.dumps(payload))
@@ -143,8 +149,10 @@ class MatchTests(unittest.IsolatedAsyncioTestCase):
             # 即使调用方复用同一组玩家对象，新比赛仍必须显式清空记忆。
             requests.clear()
             await run_match(factory, config=MatchConfig(1), policy=FAST)
-            self.assertEqual(len(requests), 2)
+            self.assertEqual(len(requests), 4)
             for payload, context in requests:
+                if context["state"]["tick"] != 1:
+                    continue
                 self.assertEqual(len(payload["messages"]), 2)
                 self.assertNotIn("PRIVATE-", json.dumps(payload))
                 self.assertNotIn("PUBLIC-", json.dumps(payload))

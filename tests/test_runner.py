@@ -30,10 +30,10 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
         a = ScriptedPlayer([ROCK])
         b = ScriptedPlayer(['{"decision_summary":"测试决策说明","actions":[{"type":"WAIT"},{"type":"MOVE","move":"Paper"}]}', SCISSORS])
         state = await run_game(a, b, policy=FAST)
-        self.assertEqual(state.completed_ticks, 1)
-        self.assertEqual(len(a.requests), 1)
-        self.assertEqual(len(b.requests), 2)
-        first, second = b.requests
+        self.assertEqual(state.completed_ticks, 2)
+        self.assertEqual(len(a.requests), 2)
+        self.assertEqual(len(b.requests), 3)
+        first, second = b.requests[:2]
         self.assertIs(first[0], second[0])
         self.assertFalse(second[0].opponent_committed)
         self.assertEqual(second[0].history, ())
@@ -44,9 +44,35 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
         a = ScriptedPlayer([TimeoutError(), "invalid", ROCK])
         b = ScriptedPlayer([SCISSORS])
         state = await run_game(a, b, policy=FAST)
-        self.assertEqual(len(a.requests), 3)
+        self.assertEqual(len(a.requests), 4)
         self.assertEqual(state.result.winner, "A")
+        self.assertEqual(state.completed_ticks, 2)
+
+    async def test_settlement_retry_keeps_same_snapshot_and_can_reverse_winner(self):
+        paper = '{"decision_summary":"最后改拳","actions":[{"type":"MOVE","move":"Paper"}]}'
+        a = ScriptedPlayer([ROCK, "invalid", paper])
+        b = ScriptedPlayer([ROCK, SCISSORS])
+        events = []
+        state = await run_game(a, b, policy=FAST, on_event=events.append)
+        self.assertEqual(state.completed_ticks, 2)
+        self.assertEqual(state.result.winner, "B")
+        self.assertIs(a.requests[1][0], a.requests[2][0])
+        view = a.requests[2][0]
+        self.assertTrue(view.is_settlement_tick)
+        self.assertTrue(view.opponent_committed)
+        self.assertNotIn("Scissors", str(view.to_dict()))
+        self.assertEqual([v.tick for v, _ in b.requests], [1, 2])
+        self.assertEqual([e.tick for e in events if e.kind == "reveal"], [2, 2])
+
+    async def test_failed_settlement_discards_revisions_without_showdown(self):
+        a = ScriptedPlayer([ROCK, "invalid", "invalid", "invalid"])
+        b = ScriptedPlayer([SCISSORS, ROCK])
+        state = await run_game(a, b, policy=FAST)
+        self.assertEqual(state.result.reason, EndReason.TECHNICAL_ERROR)
         self.assertEqual(state.completed_ticks, 1)
+        self.assertEqual(state.moves, (Gesture.ROCK, Gesture.SCISSORS))
+        self.assertEqual(state.settlement_tick, 2)
+        self.assertFalse(any(e.kind == "reveal" for e in state.events))
 
     async def test_exhausted_errors_discard_current_tick_and_keep_previous_state(self):
         a = ScriptedPlayer([ROCK, "invalid", TimeoutError(), PlayerError("暂时不可用")])

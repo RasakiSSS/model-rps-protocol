@@ -23,6 +23,10 @@ class GameTests(unittest.TestCase):
         for a, b, winner in cases:
             with self.subTest(a=a, b=b):
                 state = advance(GameState(), move(a), move(b))
+                self.assertIsNone(state.result)
+                self.assertEqual(state.settlement_tick, 2)
+                self.assertFalse(any(e.kind == "reveal" for e in state.events))
+                state = advance(state, WAIT, WAIT)
                 self.assertEqual(state.result.reason, EndReason.SHOWDOWN)
                 self.assertEqual(state.result.winner, winner)
                 self.assertEqual(judge(Gesture(a), Gesture(b)), winner)
@@ -32,15 +36,18 @@ class GameTests(unittest.TestCase):
         state = advance(GameState(), move("Rock"), WAIT)
         state = advance(state, move("Paper"), move("Scissors"))
         self.assertEqual(state.moves, (Gesture.PAPER, Gesture.SCISSORS))
+        self.assertIsNone(state.result)
+        state = advance(state, WAIT, WAIT)
         self.assertEqual(state.result.winner, "B")
-        self.assertEqual(state.completed_ticks, 2)
+        self.assertEqual(state.completed_ticks, 3)
 
     def test_all_actions_processed_before_judging(self):
         actions = parse_response(json.dumps({"decision_summary":"测试决策说明","actions": [
             {"type": "MOVE", "move": "Rock"}, {"type": "MOVE", "move": "Paper"},
             {"type": "SAY", "text": "出拳之后仍可说话"},
         ]}))
-        state = advance(GameState(), actions, move("Scissors"))
+        state = advance(GameState(), move("Rock"), move("Rock"))
+        state = advance(state, actions, move("Scissors"))
         self.assertEqual(state.result.winner, "B")
         self.assertIn("出拳之后仍可说话", [e.text for e in state.events])
         reveals = [e for e in state.events if e.kind == "reveal"]
@@ -80,8 +87,8 @@ class GameTests(unittest.TestCase):
         reminders = [e for e in state.events if e.kind == "reminder"]
         self.assertEqual([e.tick for e in reminders], [10, 18, 19])
         self.assertEqual([e.text for e in reminders], [
-            "距离本局强制结束还剩 10 Tick。", "距离本局强制结束还剩 2 Tick。",
-            "距离本局强制结束还剩 1 Tick。",
+            "距离本局提交截止还剩 10 Tick。", "距离本局提交截止还剩 2 Tick。",
+            "距离本局提交截止还剩 1 Tick。",
         ])
         self.assertEqual(state.result.reason, EndReason.NO_MOVES)
         self.assertIsNone(state.result.winner)
@@ -101,8 +108,18 @@ class GameTests(unittest.TestCase):
             state = advance(state, WAIT, WAIT)
         state = advance(state, move("Paper"), move("Scissors"))
         self.assertEqual(state.completed_ticks, 20)
+        self.assertIsNone(state.result)
+        view = state.view_for("A").to_dict()
+        self.assertEqual(view["settlement_tick"], 21)
+        self.assertTrue(view["is_settlement_tick"])
+        self.assertEqual(view["max_ticks"], 21)
+        self.assertEqual(view["submission_deadline_tick"], 20)
+        self.assertEqual(view["remaining_ticks_including_current"], 1)
+        state = advance(state, move("Rock"), WAIT)
+        self.assertEqual(state.completed_ticks, 21)
         self.assertEqual(state.result.reason, EndReason.SHOWDOWN)
-        self.assertEqual(state.result.winner, "B")
+        self.assertEqual(state.result.winner, "A")
+        self.assertEqual(state.moves, (Gesture.ROCK, Gesture.SCISSORS))
 
     def test_no_reminder_after_early_settlement(self):
         state = GameState()
@@ -110,10 +127,40 @@ class GameTests(unittest.TestCase):
             state = advance(state, WAIT, WAIT)
         state = advance(state, move("Rock"), move("Rock"))
         self.assertFalse(any(e.kind == "reminder" for e in state.events))
+        self.assertEqual(state.settlement_tick, 11)
+        state = advance(state, WAIT, WAIT)
         with self.assertRaises(ValueError):
             state.view_for("A")
         with self.assertRaises(ValueError):
             advance(state, WAIT, WAIT)
+
+    def test_both_can_change_in_settlement_tick_without_further_postponement(self):
+        state = advance(GameState(), move("Rock"), move("Scissors"))
+        for player in ("A", "B"):
+            view = state.view_for(player).to_dict()
+            self.assertTrue(view["is_settlement_tick"])
+            self.assertTrue(view["opponent_committed"])
+            self.assertEqual(view["max_ticks"], 2)
+            self.assertEqual(view["remaining_ticks_including_current"], 1)
+        self.assertNotIn("Scissors", json.dumps(state.view_for("A").to_dict()))
+        self.assertNotIn("Rock", json.dumps(state.view_for("B").to_dict()))
+        state = advance(state, move("Paper"), move("Scissors"))
+        self.assertEqual(state.result.winner, "B")
+        self.assertEqual(state.completed_ticks, 2)
+        self.assertEqual(state.settlement_tick, 2)
+        self.assertEqual(len([e for e in state.events if e.kind == "settlement_pending"]), 1)
+        with self.assertRaises(ValueError):
+            advance(state, WAIT, WAIT)
+
+    def test_last_regular_tick_can_be_the_settlement_tick(self):
+        state = GameState()
+        for _ in range(18):
+            state = advance(state, WAIT, WAIT)
+        state = advance(state, move("Rock"), move("Rock"))
+        self.assertEqual(state.settlement_tick, 20)
+        state = advance(state, move("Paper"), WAIT)
+        self.assertEqual(state.result.winner, "A")
+        self.assertEqual(state.completed_ticks, 20)
 
     def test_invalid_batch_does_not_execute_other_players_actions(self):
         state = GameState()

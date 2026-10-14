@@ -19,7 +19,7 @@ class CliTests(unittest.TestCase):
         expected = {
             "change": "模拟玩家 B 获胜", "draw": "双方到期未出拳，平局",
             "forfeit": "模拟玩家 B 到期未出拳，视为弃权", "deadline": "模拟玩家 A 获胜",
-            "retry": "模拟玩家 A 获胜",
+            "retry": "模拟玩家 A 获胜", "settlement": "模拟玩家 A 获胜",
         }
         env = dict(os.environ)
         env.pop("PYTHONIOENCODING", None)
@@ -34,17 +34,25 @@ class CliTests(unittest.TestCase):
                 self.assertIn(result, process.stdout)
                 if scenario in ("draw", "forfeit", "deadline"):
                     for remaining in (10, 2, 1):
-                        self.assertEqual(process.stdout.count(f"强制结束还剩 {remaining} Tick"), 1)
+                        self.assertEqual(process.stdout.count(f"提交截止还剩 {remaining} Tick"), 1)
                     self.assertIn("Tick 20/20", process.stdout)
                 if scenario == "change":
                     before_reveal = process.stdout.split("→")[0]
                     self.assertNotIn("石头", before_reveal)
                     self.assertNotIn("布", before_reveal)
                     self.assertIn("已修改出拳", process.stdout)
-                    self.assertNotIn("Tick 3/20", process.stdout)
+                    self.assertIn("结算 Tick 3", process.stdout)
+                    self.assertNotIn("Tick 4", process.stdout)
                 if scenario == "retry":
                     self.assertIn("第 2/3 次请求", process.stdout)
-                    self.assertNotIn("Tick 2/20", process.stdout)
+                    self.assertIn("结算 Tick 2", process.stdout)
+                if scenario == "settlement":
+                    self.assertIn("结算 Tick 2", process.stdout)
+                    self.assertIn("已修改出拳", process.stdout)
+                    self.assertIn("→ 布", process.stdout)
+                if scenario == "deadline":
+                    self.assertIn("结算 Tick 21", process.stdout)
+                    self.assertNotIn("Tick 22", process.stdout)
 
     def test_missing_keys_fail_without_creating_http_client(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -101,6 +109,7 @@ class CliTests(unittest.TestCase):
                                "--log-dir", str(Path(directory) / "logs")])
             self.assertEqual(status, 1)
             self.assertIn("技术异常中止", output.getvalue())
+            self.assertNotIn("赛后", output.getvalue())
             self.assertNotIn("test-a", output.getvalue())
             self.assertNotIn("test-b", output.getvalue())
 
