@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Callable
 
-from .game import EndReason, Event, GameState, PlayerId
+from .game import EndReason, Event, GameState, MovePolicy, PlayerId
 from .players import MatchPlayer
 from .runner import RequestPolicy, run_game
 
@@ -13,8 +13,10 @@ from .runner import RequestPolicy, run_game
 class MatchConfig:
     best_of: int = 1
     max_games: int | None = None
+    move_policy: MovePolicy = MovePolicy.LOCKED
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "move_policy", MovePolicy(self.move_policy))
         if type(self.best_of) is not int or self.best_of < 1 or self.best_of % 2 != 1:
             raise ValueError("BO 必须是正奇数，例如 1、3、5。")
         if self.max_games is None:
@@ -63,13 +65,14 @@ async def run_match(
             "game": number, "best_of": config.best_of, "target_wins": config.target_wins,
             "max_games": config.max_games, "wins": {"A": wins[0], "B": wins[1]},
             "draws": draws, "last_game": last_game,
+            "move_policy": config.move_policy.value,
         }
         for player in (a, b):
             player.start_game(context)
         if on_start:
             on_start(number)
         state = await run_game(
-            a, b, policy=policy,
+            a, b, policy=policy, move_policy=config.move_policy,
             on_event=(lambda event: on_event(number, event)) if on_event else None,
             on_request=(lambda record: on_request(number, record)) if on_request else None,
         )

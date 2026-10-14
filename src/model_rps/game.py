@@ -24,8 +24,13 @@ class ActionKind(StrEnum):
     WAIT = "WAIT"
 
 
+class MovePolicy(StrEnum):
+    LOCKED = "locked"
+    REVISABLE = "revisable"
+
+
 class InvalidResponse(ValueError):
-    """可安全反馈给模型的格式错误，不包含原始响应。"""
+    """可安全反馈给模型的格式或动作规则错误，不包含原始响应。"""
 
 
 @dataclass(frozen=True)
@@ -60,6 +65,16 @@ def validate_actions(actions: tuple[Action, ...]) -> None:
         raise InvalidResponse("actions 必须是非空动作列表。")
     if len(actions) != 1 and any(action.kind == ActionKind.WAIT for action in actions):
         raise InvalidResponse("WAIT 必须是唯一动作，不能与其他动作混用。")
+
+
+def validate_turn(actions: tuple[Action, ...], own_move: Gesture | None, move_policy: MovePolicy) -> None:
+    validate_actions(actions)
+    if move_policy == MovePolicy.LOCKED:
+        count = sum(action.kind == ActionKind.MOVE for action in actions)
+        if count and own_move is not None:
+            raise InvalidResponse("本局出拳已经锁定，不能再次 MOVE（包括相同拳型）；请使用 SAY 或单独 WAIT。")
+        if count > 1:
+            raise InvalidResponse("锁定模式每份响应最多一个 MOVE；整份响应未执行，请重新选择一次出拳。")
 
 
 def _unique_object(pairs: list[tuple[str, object]]) -> dict:
@@ -164,6 +179,7 @@ class PlayerView:
     opponent_committed: bool
     history: tuple[Event, ...]
     settlement_tick: int | None = None
+    move_policy: MovePolicy = MovePolicy.LOCKED
 
     @property
     def is_settlement_tick(self) -> bool:
@@ -172,6 +188,8 @@ class PlayerView:
     def to_dict(self) -> dict:
         return {
             "player": self.player,
+            "move_policy": self.move_policy.value,
+            "own_move_locked": self.move_policy == MovePolicy.LOCKED and self.own_move is not None,
             "tick": self.tick,
             "max_ticks": self.settlement_tick or MAX_TICKS,
             "submission_deadline_tick": MAX_TICKS,
@@ -191,6 +209,10 @@ class GameState:
     events: tuple[Event, ...] = ()
     result: Result | None = None
     settlement_tick: int | None = None
+    move_policy: MovePolicy = MovePolicy.LOCKED
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "move_policy", MovePolicy(self.move_policy))
 
     def view_for(self, player: PlayerId) -> PlayerView:
         if self.result is not None:
@@ -199,7 +221,7 @@ class GameState:
             raise ValueError("玩家必须是 A 或 B。")
         index = 0 if player == "A" else 1
         return PlayerView(player, self.completed_ticks + 1, self.moves[index],
-                          self.moves[1 - index] is not None, self.events, self.settlement_tick)
+                          self.moves[1 - index] is not None, self.events, self.settlement_tick, self.move_policy)
 
 
 def judge(a: Gesture, b: Gesture) -> PlayerId | None:
@@ -214,8 +236,8 @@ def advance(state: GameState, a: tuple[Action, ...], b: tuple[Action, ...]) -> G
     """先校验双方，再产生新状态；结算前的公开事件不携带真实拳型。"""
     if state.result is not None or state.completed_ticks >= (state.settlement_tick or MAX_TICKS):
         raise ValueError("对局已经结束。")
-    validate_actions(a)
-    validate_actions(b)
+    validate_turn(a, state.moves[0], state.move_policy)
+    validate_turn(b, state.moves[1], state.move_policy)
     tick = state.completed_ticks + 1
     moves = list(state.moves)
     events = []
@@ -235,9 +257,12 @@ def advance(state: GameState, a: tuple[Action, ...], b: tuple[Action, ...]) -> G
     if tick == settlement_tick:
         result = Result(EndReason.SHOWDOWN, judge(moves[0], moves[1]))
     elif all(move is not None for move in moves):
-        settlement_tick = tick + 1
-        events.append(Event(tick, "settlement_pending", text=
-                            f"双方均已提交出拳；下一刻（第 {settlement_tick} Tick）为结算刻，仍可改拳，全部动作处理后结算。"))
+        if state.move_policy == MovePolicy.LOCKED:
+            result = Result(EndReason.SHOWDOWN, judge(moves[0], moves[1]))
+        else:
+            settlement_tick = tick + 1
+            events.append(Event(tick, "settlement_pending", text=
+                                f"双方均已提交出拳；下一刻（第 {settlement_tick} Tick）为结算刻，仍可改拳，全部动作处理后结算。"))
     elif tick == MAX_TICKS:
         if any(move is not None for move in moves):
             result = Result(EndReason.FORFEIT, "A" if moves[0] is not None else "B")
@@ -250,11 +275,11 @@ def advance(state: GameState, a: tuple[Action, ...], b: tuple[Action, ...]) -> G
                 events.append(Event(tick, "reveal", player, move.value))
     elif settlement_tick is None and tick in REMINDER_TICKS:
         events.append(Event(tick, "reminder", text=f"距离本局提交截止还剩 {MAX_TICKS - tick} Tick。"))
-    return GameState(tick, tuple(moves), state.events + tuple(events), result, settlement_tick)
+    return GameState(tick, tuple(moves), state.events + tuple(events), result, settlement_tick, state.move_policy)
 
 
 def abort(state: GameState, player: PlayerId, message: str) -> GameState:
     """丢弃当前 Tick 的暂存动作，只保留此前完成的状态。"""
     event = Event(state.completed_ticks + 1, "error", player, message)
     return GameState(state.completed_ticks, state.moves, state.events + (event,),
-                     Result(EndReason.TECHNICAL_ERROR), state.settlement_tick)
+                     Result(EndReason.TECHNICAL_ERROR), state.settlement_tick, state.move_policy)

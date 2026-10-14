@@ -12,7 +12,7 @@ import httpx
 
 from model_rps.cli import main
 from model_rps.diagnostics import LogError
-from model_rps.game import GameState, InvalidResponse
+from model_rps.game import MovePolicy, GameState, InvalidResponse
 from model_rps.match import MatchConfig, MatchResult, MatchStatus
 from model_rps.players import ChatCompletionPlayer, DEEPSEEK, OPENAI, PlayerError, REVIEW_PROMPT
 from model_rps.postmatch import MatchArchive, parse_review, run_reviews
@@ -52,7 +52,7 @@ class PostmatchTests(unittest.TestCase):
 
     def test_technical_match_cannot_be_published_as_normal_postmatch(self):
         with self.assertRaises(ValueError):
-            MatchArchive().report(MatchConfig(3), MatchResult(MatchStatus.TECHNICAL_ERROR, (1, 0), 0, 2))
+            MatchArchive().report(MatchConfig(3, move_policy=MovePolicy.REVISABLE), MatchResult(MatchStatus.TECHNICAL_ERROR, (1, 0), 0, 2))
 
     def test_cli_bo_discloses_only_after_match_and_both_reviews_receive_same_redacted_report(self):
         game_calls = []
@@ -95,7 +95,7 @@ class PostmatchTests(unittest.TestCase):
             client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
             output = io.StringIO()
             with patch("model_rps.cli.httpx.AsyncClient", return_value=client), contextlib.redirect_stdout(output):
-                status = main(["--bo", "3", "--log-dir", str(Path(directory) / "logs"), "--secrets-file", str(path)])
+                status = main(["--move-policy", "revisable", "--bo", "3", "--log-dir", str(Path(directory) / "logs"), "--secrets-file", str(path)])
             self.assertEqual(status, 0)
             self.assertEqual(review_attempts, {"A": 2, "B": 1})
             self.assertTrue(all(c["match"] == review_calls[0][1]["match"] for _, c in review_calls))
@@ -137,7 +137,7 @@ class PostmatchTests(unittest.TestCase):
             client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
             output = io.StringIO()
             with patch("model_rps.cli.httpx.AsyncClient", return_value=client), contextlib.redirect_stdout(output):
-                status = main(["--max-games", "1", "--secrets-file", str(key_file), "--log-dir", str(Path(directory) / "logs")])
+                status = main(["--move-policy", "revisable", "--max-games", "1", "--secrets-file", str(key_file), "--log-dir", str(Path(directory) / "logs")])
             self.assertEqual(status, 4)
             self.assertEqual(attempts, {"A": 1, "B": 1})
             self.assertIn("赢得 BO1", output.getvalue())
@@ -224,9 +224,9 @@ class AsyncPostmatchTests(unittest.IsolatedAsyncioTestCase):
 
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
             player = ChatCompletionPlayer(client, OPENAI, "test-key")
-            await player.respond(GameState().view_for("B"))
+            await player.respond(GameState(move_policy=MovePolicy.REVISABLE).view_for("B"))
             await player.review({"player": "B", "match": REPORT})
-            await player.respond(GameState().view_for("B"))
+            await player.respond(GameState(move_policy=MovePolicy.REVISABLE).view_for("B"))
         self.assertEqual(len(bodies[1]["messages"]), 2)
         self.assertEqual(len(bodies[2]["messages"]), 4)
         self.assertNotIn("改善出拳分布", json.dumps(bodies[2], ensure_ascii=False))

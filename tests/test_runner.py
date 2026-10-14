@@ -1,7 +1,7 @@
 import asyncio
 import unittest
 
-from model_rps.game import EndReason, Gesture
+from model_rps.game import MovePolicy, EndReason, Gesture
 from model_rps.players import PlayerError, ScriptedPlayer, WAIT_RESPONSE
 from model_rps.runner import RequestPolicy, run_game
 
@@ -23,13 +23,13 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
                 await started[1 - self.index].wait()
                 return self.response
 
-        state = await run_game(RendezvousPlayer(0, ROCK), RendezvousPlayer(1, SCISSORS), policy=FAST)
+        state = await run_game(RendezvousPlayer(0, ROCK), RendezvousPlayer(1, SCISSORS), policy=FAST, move_policy=MovePolicy.REVISABLE)
         self.assertEqual(state.result.winner, "A")
 
     async def test_retry_uses_same_snapshot_and_does_not_repeat_successful_peer(self):
         a = ScriptedPlayer([ROCK])
         b = ScriptedPlayer(['{"decision_summary":"测试决策说明","actions":[{"type":"WAIT"},{"type":"MOVE","move":"Paper"}]}', SCISSORS])
-        state = await run_game(a, b, policy=FAST)
+        state = await run_game(a, b, policy=FAST, move_policy=MovePolicy.REVISABLE)
         self.assertEqual(state.completed_ticks, 2)
         self.assertEqual(len(a.requests), 2)
         self.assertEqual(len(b.requests), 3)
@@ -43,7 +43,7 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
     async def test_format_and_network_failures_share_three_attempts(self):
         a = ScriptedPlayer([TimeoutError(), "invalid", ROCK])
         b = ScriptedPlayer([SCISSORS])
-        state = await run_game(a, b, policy=FAST)
+        state = await run_game(a, b, policy=FAST, move_policy=MovePolicy.REVISABLE)
         self.assertEqual(len(a.requests), 4)
         self.assertEqual(state.result.winner, "A")
         self.assertEqual(state.completed_ticks, 2)
@@ -53,7 +53,7 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
         a = ScriptedPlayer([ROCK, "invalid", paper])
         b = ScriptedPlayer([ROCK, SCISSORS])
         events = []
-        state = await run_game(a, b, policy=FAST, on_event=events.append)
+        state = await run_game(a, b, policy=FAST, on_event=events.append, move_policy=MovePolicy.REVISABLE)
         self.assertEqual(state.completed_ticks, 2)
         self.assertEqual(state.result.winner, "B")
         self.assertIs(a.requests[1][0], a.requests[2][0])
@@ -67,7 +67,7 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
     async def test_failed_settlement_discards_revisions_without_showdown(self):
         a = ScriptedPlayer([ROCK, "invalid", "invalid", "invalid"])
         b = ScriptedPlayer([SCISSORS, ROCK])
-        state = await run_game(a, b, policy=FAST)
+        state = await run_game(a, b, policy=FAST, move_policy=MovePolicy.REVISABLE)
         self.assertEqual(state.result.reason, EndReason.TECHNICAL_ERROR)
         self.assertEqual(state.completed_ticks, 1)
         self.assertEqual(state.moves, (Gesture.ROCK, Gesture.SCISSORS))
@@ -77,7 +77,7 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
     async def test_exhausted_errors_discard_current_tick_and_keep_previous_state(self):
         a = ScriptedPlayer([ROCK, "invalid", TimeoutError(), PlayerError("暂时不可用")])
         b = ScriptedPlayer([WAIT_RESPONSE, SCISSORS])
-        state = await run_game(a, b, policy=FAST)
+        state = await run_game(a, b, policy=FAST, move_policy=MovePolicy.REVISABLE)
         self.assertEqual(state.result.reason, EndReason.TECHNICAL_ERROR)
         self.assertIsNone(state.result.winner)
         self.assertEqual(state.completed_ticks, 1)
@@ -101,7 +101,7 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
 
         a = SlowPlayer()
         b = ScriptedPlayer([SCISSORS])
-        state = await run_game(a, b, policy=RequestPolicy(timeout=0.01, retry_delay=0))
+        state = await run_game(a, b, policy=RequestPolicy(timeout=0.01, retry_delay=0), move_policy=MovePolicy.REVISABLE)
         self.assertEqual(a.calls, 3)
         self.assertEqual(a.cancellations, 3)
         self.assertEqual(len(b.requests), 1)
@@ -126,14 +126,14 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
                 finally:
                     cancelled.set()
 
-        state = await run_game(Failing(), Pending(), policy=FAST)
+        state = await run_game(Failing(), Pending(), policy=FAST, move_policy=MovePolicy.REVISABLE)
         self.assertTrue(cancelled.is_set())
         self.assertEqual(state.result.reason, EndReason.TECHNICAL_ERROR)
 
     async def test_unexpected_exception_does_not_print_secret(self):
         events = []
         state = await run_game(ScriptedPlayer([RuntimeError("sensitive-key")]),
-                               ScriptedPlayer([SCISSORS]), policy=FAST, on_event=events.append)
+                               ScriptedPlayer([SCISSORS]), policy=FAST, on_event=events.append, move_policy=MovePolicy.REVISABLE)
         self.assertEqual(state.result.reason, EndReason.TECHNICAL_ERROR)
         self.assertNotIn("sensitive-key", repr(events))
 
@@ -152,7 +152,7 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
                 finally:
                     cancelled.append(self.index)
 
-        task = asyncio.create_task(run_game(Pending(0), Pending(1), policy=FAST))
+        task = asyncio.create_task(run_game(Pending(0), Pending(1), policy=FAST, move_policy=MovePolicy.REVISABLE))
         await asyncio.gather(*(event.wait() for event in started))
         task.cancel()
         with self.assertRaises(asyncio.CancelledError):
@@ -162,7 +162,7 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
     async def test_next_tick_sees_public_history_and_commit_status(self):
         a = ScriptedPlayer([ROCK, WAIT_RESPONSE])
         b = ScriptedPlayer([WAIT_RESPONSE, SCISSORS])
-        state = await run_game(a, b, policy=FAST)
+        state = await run_game(a, b, policy=FAST, move_policy=MovePolicy.REVISABLE)
         self.assertTrue(b.requests[1][0].opponent_committed)
         self.assertEqual(b.requests[1][0].tick, 2)
         self.assertEqual([e.kind for e in b.requests[1][0].history], ["commit", "wait"])

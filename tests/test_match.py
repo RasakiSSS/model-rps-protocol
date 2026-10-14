@@ -3,7 +3,7 @@ import unittest
 
 import httpx
 
-from model_rps.game import EndReason
+from model_rps.game import MovePolicy, EndReason
 from model_rps.match import MatchConfig, MatchStatus, run_match
 from model_rps.players import ChatCompletionPlayer, DEEPSEEK, OPENAI, PlayerError, ScriptedPlayer, WAIT_RESPONSE
 from model_rps.runner import RequestPolicy
@@ -30,7 +30,7 @@ class MatchTests(unittest.IsolatedAsyncioTestCase):
                     players.append(pair)
                     return pair
 
-                result = await run_match(factory, config=MatchConfig(bo), policy=FAST)
+                result = await run_match(factory, config=MatchConfig(bo, move_policy=MovePolicy.REVISABLE), policy=FAST)
                 self.assertEqual(result.winner, "A")
                 self.assertEqual(result.wins, (bo // 2 + 1, 0))
                 self.assertEqual(len(players), 1)
@@ -48,7 +48,7 @@ class MatchTests(unittest.IsolatedAsyncioTestCase):
             return (ScriptedPlayer([response for a, b in outcomes for response in (move(a), WAIT_RESPONSE)]),
                     ScriptedPlayer([response for a, b in outcomes for response in (move(b), WAIT_RESPONSE)]))
 
-        result = await run_match(factory, config=MatchConfig(3, 4), policy=FAST)
+        result = await run_match(factory, config=MatchConfig(3, 4, move_policy=MovePolicy.REVISABLE), policy=FAST)
         self.assertEqual(result.status, MatchStatus.WON)
         self.assertEqual(result.winner, "B")
         self.assertEqual(result.wins, (1, 2))
@@ -63,7 +63,7 @@ class MatchTests(unittest.IsolatedAsyncioTestCase):
             return (ScriptedPlayer([move("Paper"), WAIT_RESPONSE] + [move("Rock"), WAIT_RESPONSE] * 2),
                     ScriptedPlayer([move("Rock"), WAIT_RESPONSE] * 3))
 
-        result = await run_match(factory, config=MatchConfig(3, 3), policy=FAST)
+        result = await run_match(factory, config=MatchConfig(3, 3, move_policy=MovePolicy.REVISABLE), policy=FAST)
         self.assertEqual(result.status, MatchStatus.UNDECIDED)
         self.assertIsNone(result.winner)
         self.assertEqual(result.wins, (1, 0))
@@ -81,7 +81,7 @@ class MatchTests(unittest.IsolatedAsyncioTestCase):
                                    [PlayerError("HTTP 401", retryable=False)]),
                     ScriptedPlayer([WAIT_RESPONSE] * 20 + [move("Paper")]))
 
-        result = await run_match(factory, config=MatchConfig(3), policy=FAST,
+        result = await run_match(factory, config=MatchConfig(3, move_policy=MovePolicy.REVISABLE), policy=FAST,
                                  on_end=lambda n, state, wins, draws: reasons.append(state.result.reason))
         self.assertEqual(reasons, [EndReason.FORFEIT, EndReason.TECHNICAL_ERROR])
         self.assertEqual(result.status, MatchStatus.TECHNICAL_ERROR)
@@ -113,7 +113,7 @@ class MatchTests(unittest.IsolatedAsyncioTestCase):
             def factory():
                 return players
 
-            result = await run_match(factory, config=MatchConfig(5), policy=FAST)
+            result = await run_match(factory, config=MatchConfig(5, move_policy=MovePolicy.REVISABLE), policy=FAST)
             self.assertEqual(result.wins, (3, 0))
             self.assertEqual(counts, {DEEPSEEK.model: 7, OPENAI.model: 6})
             for payload, context in requests:
@@ -148,7 +148,7 @@ class MatchTests(unittest.IsolatedAsyncioTestCase):
 
             # 即使调用方复用同一组玩家对象，新比赛仍必须显式清空记忆。
             requests.clear()
-            await run_match(factory, config=MatchConfig(1), policy=FAST)
+            await run_match(factory, config=MatchConfig(1, move_policy=MovePolicy.REVISABLE), policy=FAST)
             self.assertEqual(len(requests), 4)
             for payload, context in requests:
                 if context["state"]["tick"] != 1:
@@ -163,12 +163,12 @@ class MatchTests(unittest.IsolatedAsyncioTestCase):
     def test_invalid_config_and_default_limits(self):
         for bo in (0, -1, 2, 4, True, 3.0, "3"):
             with self.subTest(bo=bo), self.assertRaises(ValueError):
-                MatchConfig(bo)
+                MatchConfig(bo, move_policy=MovePolicy.REVISABLE)
         for limit in (0, -1, 1, True, 2.5):
             with self.subTest(limit=limit), self.assertRaises(ValueError):
-                MatchConfig(3, limit)
-        self.assertEqual(MatchConfig(3).max_games, 30)
-        self.assertEqual(MatchConfig(1).max_games, 10)
+                MatchConfig(3, limit, move_policy=MovePolicy.REVISABLE)
+        self.assertEqual(MatchConfig(3, move_policy=MovePolicy.REVISABLE).max_games, 30)
+        self.assertEqual(MatchConfig(1, move_policy=MovePolicy.REVISABLE).max_games, 10)
 
 
 if __name__ == "__main__":

@@ -8,7 +8,7 @@ from time import perf_counter
 from dataclasses import dataclass
 from typing import Callable
 
-from .game import Action, Event, GameState, InvalidResponse, PlayerView, abort, advance, parse_decision
+from .game import Action, Event, GameState, InvalidResponse, MovePolicy, PlayerView, abort, advance, parse_decision, validate_turn
 from .diagnostics import LogError, TraceHandler, request_trace, trace
 from .players import Player, PlayerError
 
@@ -50,6 +50,7 @@ async def _request_actions(player: Player, view: PlayerView, policy: RequestPoli
                     raw = await player.respond(view, feedback)
                 trace("raw_response", content=raw)
                 decision = parse_decision(raw)
+                validate_turn(decision.actions, view.own_move, view.move_policy)
                 trace("decision", summary=decision.summary, status="validated",
                       actions=[action.to_dict() for action in decision.actions])
                 trace("request_end", status="valid", elapsed_seconds=perf_counter() - started)
@@ -61,7 +62,7 @@ async def _request_actions(player: Player, view: PlayerView, policy: RequestPoli
                 raise
             except InvalidResponse as exc:
                 feedback = f"本次响应无效，整份动作均未执行。{exc} 请重新返回完整 JSON。"
-                summary = "响应格式无效"
+                summary = "响应格式或动作无效"
             except TimeoutError:
                 summary = "请求超时"
                 feedback = "本次请求超时，未执行任何动作。请根据相同状态重新返回完整 JSON。"
@@ -88,11 +89,12 @@ async def _request_actions(player: Player, view: PlayerView, policy: RequestPoli
 
 
 async def run_game(a: Player, b: Player, *, policy: RequestPolicy | None = None,
+                   move_policy: MovePolicy = MovePolicy.LOCKED,
                    on_event: EventHandler | None = None,
                    on_request: TraceHandler | None = None) -> GameState:
     policy = policy or RequestPolicy()
     emit = on_event or (lambda event: None)
-    state = GameState()
+    state = GameState(move_policy=move_policy)
     while state.result is None:
         views = (state.view_for("A"), state.view_for("B"))
         emit(Event(views[0].tick, "tick", text="settlement" if views[0].is_settlement_tick else ""))

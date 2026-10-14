@@ -4,7 +4,7 @@ from dataclasses import replace
 
 import httpx
 
-from model_rps.game import EndReason, GameState, advance, parse_response
+from model_rps.game import MovePolicy, EndReason, GameState, advance, parse_response
 from model_rps.players import ChatCompletionPlayer, DEEPSEEK, OPENAI, PlayerError, WAIT_RESPONSE
 from model_rps.runner import RequestPolicy, run_game
 
@@ -24,7 +24,7 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
             requests.append(request)
             return httpx.Response(200, json=completion())
 
-        state = advance(GameState(), parse_response(ROCK), parse_response(WAIT_RESPONSE))
+        state = advance(GameState(move_policy=MovePolicy.REVISABLE), parse_response(ROCK), parse_response(WAIT_RESPONSE))
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
             deepseek = ChatCompletionPlayer(client, DEEPSEEK, "test-deepseek-key")
             openai = ChatCompletionPlayer(client, OPENAI, "test-openai-key")
@@ -64,7 +64,7 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
                 async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
                     player = ChatCompletionPlayer(client, OPENAI, "test-key")
                     with self.assertRaises(PlayerError) as caught:
-                        await player.respond(GameState().view_for("A"))
+                        await player.respond(GameState(move_policy=MovePolicy.REVISABLE).view_for("A"))
                 self.assertEqual(caught.exception.retryable, retryable)
                 self.assertNotIn("private-server-data", str(caught.exception))
                 self.assertNotIn("test-key", str(caught.exception))
@@ -82,12 +82,12 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
                 )) as client:
                     player = ChatCompletionPlayer(client, OPENAI, "test-key")
                     with self.assertRaises(PlayerError):
-                        await player.respond(GameState().view_for("A"))
+                        await player.respond(GameState(move_policy=MovePolicy.REVISABLE).view_for("A"))
         async with httpx.AsyncClient(transport=httpx.MockTransport(
             lambda request: httpx.Response(200, text="not JSON")
         )) as client:
             with self.assertRaises(PlayerError):
-                await ChatCompletionPlayer(client, OPENAI, "test-key").respond(GameState().view_for("A"))
+                await ChatCompletionPlayer(client, OPENAI, "test-key").respond(GameState(move_policy=MovePolicy.REVISABLE).view_for("A"))
 
     async def test_transport_timeout_and_connection_error_are_sanitized(self):
         for kind, expected in ((httpx.ReadTimeout, TimeoutError), (httpx.ConnectError, PlayerError)):
@@ -98,7 +98,7 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
                 async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
                     player = ChatCompletionPlayer(client, OPENAI, "test-key")
                     with self.assertRaises(expected) as caught:
-                        await player.respond(GameState().view_for("A"))
+                        await player.respond(GameState(move_policy=MovePolicy.REVISABLE).view_for("A"))
                 self.assertNotIn("sensitive", str(caught.exception))
 
     async def test_http_and_format_retries_share_budget_in_complete_game(self):
@@ -123,7 +123,7 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
                 ChatCompletionPlayer(client, DEEPSEEK, "test-a"),
                 ChatCompletionPlayer(client, OPENAI, "test-b"),
                 policy=RequestPolicy(timeout=1, retry_delay=0),
-            )
+            move_policy=MovePolicy.REVISABLE)
         self.assertEqual(state.result.reason, EndReason.SHOWDOWN)
         self.assertEqual(state.result.winner, "A")
         self.assertEqual(counts, {"deepseek-flash": 4, "gpt-6-luna": 2})
@@ -141,7 +141,7 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
 
         spec = replace(OPENAI, model="custom-model", base_url="https://example.test/v1/")
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-            await ChatCompletionPlayer(client, spec, "test-key").respond(GameState().view_for("A"))
+            await ChatCompletionPlayer(client, spec, "test-key").respond(GameState(move_policy=MovePolicy.REVISABLE).view_for("A"))
         self.assertEqual(str(requests[0].url), "https://example.test/v1/chat/completions")
         self.assertEqual(json.loads(requests[0].content)["model"], "custom-model")
 
@@ -154,8 +154,8 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
 
         spec = replace(DEEPSEEK, base_url=OPENAI.base_url, model="deepseek-v4.1-flash")
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-            await ChatCompletionPlayer(client, spec, "gateway-key-a").respond(GameState().view_for("A"))
-            await ChatCompletionPlayer(client, OPENAI, "gateway-key-b").respond(GameState().view_for("B"))
+            await ChatCompletionPlayer(client, spec, "gateway-key-a").respond(GameState(move_policy=MovePolicy.REVISABLE).view_for("A"))
+            await ChatCompletionPlayer(client, OPENAI, "gateway-key-b").respond(GameState(move_policy=MovePolicy.REVISABLE).view_for("B"))
         self.assertEqual(headers, ["Bearer gateway-key-a", "Bearer gateway-key-b"])
 
     async def test_invalid_adapter_settings_fail_before_request(self):

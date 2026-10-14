@@ -27,7 +27,7 @@ class CliTests(unittest.TestCase):
             with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as directory:
                 process = subprocess.run(
                     [sys.executable, "-m", "model_rps", "--mode", "demo", "--scenario", scenario,
-                     "--max-games", "1", "--log-dir", directory],
+                     "--max-games", "1", "--log-dir", directory, "--move-policy", "revisable"],
                     capture_output=True, text=True, encoding="utf-8", env=env, timeout=15,
                 )
                 self.assertEqual(process.returncode, 3 if scenario == "draw" else 0, process.stderr)

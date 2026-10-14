@@ -42,6 +42,7 @@ class MatchArchive:
             raise ValueError("技术异常中止的比赛不自动公开说明或请求复盘。")
         return deepcopy({
             "best_of": config.best_of, "target_wins": config.target_wins, "max_games": config.max_games,
+            "move_policy": config.move_policy.value,
             "result": {"status": result.status.value, "winner": result.winner,
                        "wins": {"A": result.wins[0], "B": result.wins[1]},
                        "draws": result.draws, "games_played": result.games_played},

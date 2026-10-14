@@ -13,7 +13,7 @@ from pathlib import Path
 
 import httpx
 
-from .game import EndReason, Event, GameState, MAX_TICKS
+from .game import EndReason, Event, GameState, MAX_TICKS, MovePolicy
 from .diagnostics import LogError
 from .logs import RunLogs
 from .match import MatchConfig, MatchStatus, run_match
@@ -111,8 +111,10 @@ def make_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Model RPS：两个独立模型的猜拳博弈")
     parser.add_argument("--mode", choices=("demo", "live"), default="live",
                         help="live 真实模型（默认）；demo 模拟对局")
-    parser.add_argument("--scenario", choices=("change", "settlement", "draw", "forfeit", "deadline", "retry"),
-                        default="change", help="模拟场景，默认演示改拳")
+    parser.add_argument("--move-policy", choices=tuple(MovePolicy), default=MovePolicy.LOCKED.value,
+                        help="locked 提交后锁定（默认）；revisable 允许改拳，下一 Tick 结算")
+    parser.add_argument("--scenario", choices=("locked", "change", "settlement", "draw", "forfeit", "deadline", "retry"),
+                        help="模拟场景，默认随出拳规则选择 locked 或 change")
     parser.add_argument("--secrets-file", type=Path, default=Path("local_secrets.py"), help="本地密钥文件路径")
     parser.add_argument("--timeout", type=float, default=RequestPolicy().timeout, help="每次请求的总超时秒数")
     parser.add_argument("--bo", type=int, default=1, help="正奇数；BO N 先赢 N//2+1 局，默认 BO1")
@@ -128,7 +130,10 @@ def make_parser() -> argparse.ArgumentParser:
 async def play(args: argparse.Namespace) -> int:
     policy = RequestPolicy(timeout=args.timeout,
                            retry_delay=0 if args.mode == "demo" else RequestPolicy().retry_delay)
-    config = MatchConfig(args.bo, args.max_games)
+    config = MatchConfig(args.bo, args.max_games, MovePolicy(args.move_policy))
+    scenario = args.scenario or ("locked" if config.move_policy == MovePolicy.LOCKED else "change")
+    if args.mode == "demo" and scenario in ("change", "settlement") and config.move_policy == MovePolicy.LOCKED:
+        raise ValueError("change 和 settlement 场景需要 --move-policy revisable。")
 
     async def execute(factory, names, logs):
         console = Console(names, logs)
@@ -137,9 +142,12 @@ async def play(args: argparse.Namespace) -> int:
         print(f"日志目录：{display_text(str(logs.path.resolve()))}", flush=True)
         console.write(f"System：{'模拟' if args.mode == 'demo' else '真实模型'}比赛 BO{config.best_of}，"
                       f"先胜 {config.target_wins} 局；实际最多 {config.max_games} 局。")
+        console.write("System：出拳规则 locked：首次提交后锁定；双方提交齐全的当前 Tick 结束时结算。"
+                      if config.move_policy == MovePolicy.LOCKED else
+                      "System：出拳规则 revisable：允许改拳；双方提交齐全后的下一 Tick 结算。")
         logs.lifecycle("match_start", best_of=config.best_of, max_games=config.max_games,
                        target_wins=config.target_wins, players=names, mode=args.mode,
-                       timeout=policy.timeout, retry_delay=policy.retry_delay)
+                       timeout=policy.timeout, retry_delay=policy.retry_delay, move_policy=config.move_policy)
 
         def start(number):
             console.game, console.tick = number, 0
@@ -204,7 +212,7 @@ async def play(args: argparse.Namespace) -> int:
 
     if args.mode == "demo":
         with RunLogs(args.log_dir) as logs:
-            return await execute(lambda: demo_players(args.scenario),
+            return await execute(lambda: demo_players(scenario),
                                  {"A": "模拟玩家 A", "B": "模拟玩家 B"}, logs)
     keys = load_keys(args.secrets_file)
     deepseek = replace(DEEPSEEK, base_url=args.deepseek_base_url, model=args.deepseek_model)

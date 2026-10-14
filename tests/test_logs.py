@@ -11,6 +11,7 @@ import httpx
 
 from model_rps.cli import Console, main
 from model_rps.diagnostics import LogError
+from model_rps.game import MovePolicy
 from model_rps.logs import RunLogs
 from model_rps.players import ChatCompletionPlayer, DEEPSEEK, OPENAI, ScriptedPlayer
 from model_rps.runner import RequestPolicy, run_game
@@ -32,7 +33,7 @@ class LogTests(unittest.TestCase):
     def test_bo3_cli_writes_five_files_and_match_results(self):
         with tempfile.TemporaryDirectory() as directory:
             with contextlib.redirect_stdout(io.StringIO()):
-                status = main(["--mode", "demo", "--bo", "3", "--log-dir", directory])
+                status = main(["--move-policy", "revisable", "--mode", "demo", "--bo", "3", "--log-dir", directory])
             self.assertEqual(status, 0)
             root, = Path(directory).iterdir()
             self.assertEqual({str(path.relative_to(root)).replace("\\", "/") for path in root.rglob("*.log")},
@@ -77,7 +78,7 @@ class LogTests(unittest.TestCase):
             root = Path(directory) / "occupied"
             root.write_text("keep", encoding="utf-8")
             with contextlib.redirect_stderr(io.StringIO()):
-                status = main(["--mode", "demo", "--log-dir", str(root)])
+                status = main(["--move-policy", "revisable", "--mode", "demo", "--log-dir", str(root)])
             self.assertEqual(status, 1)
             self.assertEqual(root.read_text(encoding="utf-8"), "keep")
 
@@ -95,13 +96,13 @@ class LogTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             output = io.StringIO()
             with contextlib.redirect_stdout(output):
-                status = main(["--mode", "demo", "--scenario", "draw", "--bo", "3", "--max-games", "2", "--log-dir", directory])
+                status = main(["--move-policy", "revisable", "--mode", "demo", "--scenario", "draw", "--bo", "3", "--max-games", "2", "--log-dir", directory])
             self.assertEqual(status, 3)
             self.assertIn("比赛未决", output.getvalue())
             self.assertEqual(output.getvalue().count("本局提交截止还剩 10 Tick"), 2)
             for options in (["--bo", "2"], ["--bo", "3", "--max-games", "1"]):
                 with contextlib.redirect_stderr(io.StringIO()):
-                    self.assertEqual(main([*options, "--log-dir", directory]), 2)
+                    self.assertEqual(main(["--move-policy", "revisable", *options, "--log-dir", directory]), 2)
             self.assertEqual(len(list(Path(directory).iterdir())), 1)
 
 
@@ -131,7 +132,7 @@ class AsyncLogTests(unittest.IsolatedAsyncioTestCase):
                     with contextlib.redirect_stdout(io.StringIO()):
                         state = await run_game(ChatCompletionPlayer(client, DEEPSEEK, "secret-a"),
                                                ChatCompletionPlayer(client, OPENAI, "secret-b"), policy=FAST,
-                                               on_request=lambda r: logs.request(1, r), on_event=console.event)
+                                               on_request=lambda r: logs.request(1, r), on_event=console.event, move_policy=MovePolicy.REVISABLE)
                 self.assertEqual(state.result.winner, "A")
                 a = records(logs.path / "player_a/debug.log")
                 b = records(logs.path / "player_b/debug.log")
@@ -173,10 +174,10 @@ class AsyncLogTests(unittest.IsolatedAsyncioTestCase):
             async def play():
                 with logs:
                     await run_game(Pending(0), Pending(1), policy=FAST,
-                                   on_request=lambda r: logs.request(1, r))
+                                   on_request=lambda r: logs.request(1, r), move_policy=MovePolicy.REVISABLE)
 
             task = asyncio.create_task(play())
-            await asyncio.gather(*(e.wait() for e in started))
+            await asyncio.wait_for(asyncio.gather(*(e.wait() for e in started)), timeout=5)
             task.cancel()
             with self.assertRaises(asyncio.CancelledError):
                 await task
@@ -192,7 +193,7 @@ class AsyncLogTests(unittest.IsolatedAsyncioTestCase):
                 a, b = ScriptedPlayer([response()]), ScriptedPlayer([response()])
                 with patch.object(logs._files["A", "debug"], "write", side_effect=OSError("private failure")):
                     with self.assertRaises(LogError) as caught:
-                        await run_game(a, b, policy=FAST, on_request=lambda r: logs.request(1, r))
+                        await run_game(a, b, policy=FAST, on_request=lambda r: logs.request(1, r), move_policy=MovePolicy.REVISABLE)
                 self.assertNotIn("private failure", str(caught.exception))
                 self.assertEqual(len(a.requests), 0)
                 self.assertLessEqual(len(b.requests), 1)
