@@ -8,8 +8,8 @@ from model_rps.game import EndReason, GameState, advance, parse_response
 from model_rps.players import ChatCompletionPlayer, DEEPSEEK, OPENAI, PlayerError, WAIT_RESPONSE
 from model_rps.runner import RequestPolicy, run_game
 
-ROCK = '{"actions":[{"type":"MOVE","move":"Rock"}]}'
-SCISSORS = '{"actions":[{"type":"MOVE","move":"Scissors"}]}'
+ROCK = '{"decision_summary":"测试决策说明","actions":[{"type":"MOVE","move":"Rock"}]}'
+SCISSORS = '{"decision_summary":"测试决策说明","actions":[{"type":"MOVE","move":"Scissors"}]}'
 
 
 def completion(content=ROCK, finish_reason="stop"):
@@ -30,18 +30,18 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
             openai = ChatCompletionPlayer(client, OPENAI, "test-openai-key")
             await deepseek.respond(state.view_for("A"), "仅 A 的纠错信息")
             await openai.respond(state.view_for("B"))
-        self.assertEqual(str(requests[0].url), "https://ai.yuhuantin.icu/v1/chat/completions")
+        self.assertEqual(str(requests[0].url), "https://api.deepseek.com/chat/completions")
         self.assertEqual(str(requests[1].url), "https://ai.yuhuantin.icu/v1/chat/completions")
         self.assertEqual(requests[0].headers["authorization"], "Bearer test-deepseek-key")
         self.assertEqual(requests[1].headers["authorization"], "Bearer test-openai-key")
         a, b = [json.loads(request.content) for request in requests]
-        self.assertEqual(a["model"], "deepseek-v4.1-flash")
+        self.assertEqual(a["model"], "deepseek-flash")
         self.assertEqual(a["thinking"], {"type": "disabled"})
-        self.assertEqual(a["max_tokens"], 2048)
+        self.assertEqual(a["max_tokens"], 15000)
         self.assertNotIn("max_completion_tokens", a)
         self.assertEqual(b["model"], "gpt-6-luna")
         self.assertEqual(b["reasoning_effort"], "none")
-        self.assertEqual(b["max_completion_tokens"], 2048)
+        self.assertEqual(b["max_completion_tokens"], 15000)
         self.assertNotIn("max_tokens", b)
         for payload in (a, b):
             self.assertFalse(payload["stream"])
@@ -102,19 +102,19 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
                 self.assertNotIn("sensitive", str(caught.exception))
 
     async def test_http_and_format_retries_share_budget_in_complete_game(self):
-        counts = {"deepseek-v4.1-flash": 0, "gpt-6-luna": 0}
+        counts = {"deepseek-flash": 0, "gpt-6-luna": 0}
         a_contexts = []
 
         def handler(request):
             body = json.loads(request.content)
             model = body["model"]
             counts[model] += 1
-            if model == "deepseek-v4.1-flash":
-                a_contexts.append(json.loads(body["messages"][1]["content"]))
+            if model == "deepseek-flash":
+                a_contexts.append(json.loads(body["messages"][-1]["content"]))
                 if counts[model] == 1:
                     return httpx.Response(429)
                 if counts[model] == 2:
-                    return httpx.Response(200, json=completion('{"actions":[]}'))
+                    return httpx.Response(200, json=completion('{"decision_summary":"测试决策说明","actions":[]}'))
                 return httpx.Response(200, json=completion(ROCK))
             return httpx.Response(200, json=completion(SCISSORS))
 
@@ -126,7 +126,7 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
             )
         self.assertEqual(state.result.reason, EndReason.SHOWDOWN)
         self.assertEqual(state.result.winner, "A")
-        self.assertEqual(counts, {"deepseek-v4.1-flash": 3, "gpt-6-luna": 1})
+        self.assertEqual(counts, {"deepseek-flash": 3, "gpt-6-luna": 1})
         self.assertTrue(all(context["state"] == a_contexts[0]["state"] for context in a_contexts))
         self.assertIn("HTTP 429", a_contexts[1]["correction"])
         self.assertIn("actions", a_contexts[2]["correction"])
@@ -143,6 +143,19 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
             await ChatCompletionPlayer(client, spec, "test-key").respond(GameState().view_for("A"))
         self.assertEqual(str(requests[0].url), "https://example.test/v1/chat/completions")
         self.assertEqual(json.loads(requests[0].content)["model"], "custom-model")
+
+    async def test_shared_gateway_still_uses_each_players_own_key(self):
+        headers = []
+
+        def handler(request):
+            headers.append(request.headers["authorization"])
+            return httpx.Response(200, json=completion())
+
+        spec = replace(DEEPSEEK, base_url=OPENAI.base_url, model="deepseek-v4.1-flash")
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            await ChatCompletionPlayer(client, spec, "gateway-key-a").respond(GameState().view_for("A"))
+            await ChatCompletionPlayer(client, OPENAI, "gateway-key-b").respond(GameState().view_for("B"))
+        self.assertEqual(headers, ["Bearer gateway-key-a", "Bearer gateway-key-b"])
 
     async def test_invalid_adapter_settings_fail_before_request(self):
         async with httpx.AsyncClient(transport=httpx.MockTransport(

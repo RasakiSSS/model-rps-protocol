@@ -36,7 +36,7 @@ class GameTests(unittest.TestCase):
         self.assertEqual(state.completed_ticks, 2)
 
     def test_all_actions_processed_before_judging(self):
-        actions = parse_response(json.dumps({"actions": [
+        actions = parse_response(json.dumps({"decision_summary":"测试决策说明","actions": [
             {"type": "MOVE", "move": "Rock"}, {"type": "MOVE", "move": "Paper"},
             {"type": "SAY", "text": "出拳之后仍可说话"},
         ]}))
@@ -124,27 +124,42 @@ class GameTests(unittest.TestCase):
 
 
 class ResponseTests(unittest.TestCase):
+    def test_decision_summary_is_required_and_private(self):
+        from model_rps.game import parse_decision
+
+        for summary in (None, "", "  ", 1, []):
+            with self.subTest(summary=summary), self.assertRaises(InvalidResponse):
+                parse_response(json.dumps({"decision_summary": summary, "actions": [{"type": "WAIT"}]}))
+        with self.assertRaises(InvalidResponse):
+            parse_response('{"actions":[{"type":"WAIT"}]}')
+        raw = json.dumps({"decision_summary": "private-strategy", "actions": [{"type": "WAIT"}]})
+        decision = parse_decision(raw)
+        self.assertEqual(decision.summary, "private-strategy")
+        state = advance(GameState(), decision.actions, WAIT)
+        self.assertNotIn("private-strategy", repr(state))
+        self.assertNotIn("private-strategy", json.dumps(state.view_for("B").to_dict()))
+
     def test_valid_multiple_actions_and_wait(self):
-        result = parse_response('{"actions":[{"type":"SAY","text":"你好"},'
+        result = parse_response('{"decision_summary":"测试决策说明","actions":[{"type":"SAY","text":"你好"},'
                                 '{"type":"MOVE","move":"Rock"}]}')
         self.assertEqual(result, (Action(ActionKind.SAY, text="你好"), *move("Rock")))
-        self.assertEqual(parse_response('{"actions":[{"type":"WAIT"}]}'), WAIT)
+        self.assertEqual(parse_response('{"decision_summary":"测试决策说明","actions":[{"type":"WAIT"}]}'), WAIT)
 
     def test_invalid_payloads_are_rejected_as_a_whole(self):
         cases = [
             "", " ", "not JSON", "```json\n{}\n```", "[]", "null", "{}",
-            '{"actions":[]}', '{"actions":{}}', '{"actions":[null]}',
-            '{"actions":[{"type":"WAIT"}],"extra":1}',
-            '{"actions":[{"type":"WAIT","text":"wrong"}]}',
-            '{"actions":[{"type":"WAIT"},{"type":"SAY","text":"hello"}]}',
-            '{"actions":[{"type":"WAIT"},{"type":"WAIT"}]}',
-            '{"actions":[{"type":"MOVE","move":"Lizard"}]}',
-            '{"actions":[{"type":"MOVE","move":null}]}',
-            '{"actions":[{"type":"SAY","text":" "}]}',
-            '{"actions":[{"type":"SAY","text":1}]}',
-            '{"actions":[{"type":"SAY","text":"hello"},{"type":"BAD"}]}',
-            '{"actions":[{"type":"WAIT"}],"actions":[{"type":"WAIT"}]}',
-            '{"actions":[{"type":"SAY","text":NaN}]}',
+            '{"decision_summary":"测试决策说明","actions":[]}', '{"decision_summary":"测试决策说明","actions":{}}', '{"decision_summary":"测试决策说明","actions":[null]}',
+            '{"decision_summary":"测试决策说明","actions":[{"type":"WAIT"}],"extra":1}',
+            '{"decision_summary":"测试决策说明","actions":[{"type":"WAIT","text":"wrong"}]}',
+            '{"decision_summary":"测试决策说明","actions":[{"type":"WAIT"},{"type":"SAY","text":"hello"}]}',
+            '{"decision_summary":"测试决策说明","actions":[{"type":"WAIT"},{"type":"WAIT"}]}',
+            '{"decision_summary":"测试决策说明","actions":[{"type":"MOVE","move":"Lizard"}]}',
+            '{"decision_summary":"测试决策说明","actions":[{"type":"MOVE","move":null}]}',
+            '{"decision_summary":"测试决策说明","actions":[{"type":"SAY","text":" "}]}',
+            '{"decision_summary":"测试决策说明","actions":[{"type":"SAY","text":1}]}',
+            '{"decision_summary":"测试决策说明","actions":[{"type":"SAY","text":"hello"},{"type":"BAD"}]}',
+            '{"decision_summary":"测试决策说明","actions":[{"type":"WAIT"}],"actions":[{"type":"WAIT"}]}',
+            '{"decision_summary":"测试决策说明","actions":[{"type":"SAY","text":NaN}]}',
         ]
         for raw in cases:
             with self.subTest(raw=raw), self.assertRaises(InvalidResponse):

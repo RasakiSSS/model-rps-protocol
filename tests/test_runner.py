@@ -5,8 +5,8 @@ from model_rps.game import EndReason, Gesture
 from model_rps.players import PlayerError, ScriptedPlayer, WAIT_RESPONSE
 from model_rps.runner import RequestPolicy, run_game
 
-ROCK = '{"actions":[{"type":"MOVE","move":"Rock"}]}'
-SCISSORS = '{"actions":[{"type":"MOVE","move":"Scissors"}]}'
+ROCK = '{"decision_summary":"测试决策说明","actions":[{"type":"MOVE","move":"Rock"}]}'
+SCISSORS = '{"decision_summary":"测试决策说明","actions":[{"type":"MOVE","move":"Scissors"}]}'
 FAST = RequestPolicy(timeout=1, retry_delay=0)
 
 
@@ -28,7 +28,7 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_retry_uses_same_snapshot_and_does_not_repeat_successful_peer(self):
         a = ScriptedPlayer([ROCK])
-        b = ScriptedPlayer(['{"actions":[{"type":"WAIT"},{"type":"MOVE","move":"Paper"}]}', SCISSORS])
+        b = ScriptedPlayer(['{"decision_summary":"测试决策说明","actions":[{"type":"WAIT"},{"type":"MOVE","move":"Paper"}]}', SCISSORS])
         state = await run_game(a, b, policy=FAST)
         self.assertEqual(state.completed_ticks, 1)
         self.assertEqual(len(a.requests), 1)

@@ -19,3 +19,6 @@ local_secrets.py
 .env
 .env.*
 !.env.example
+
+# Local match logs
+logs/

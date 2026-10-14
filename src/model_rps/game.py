@@ -67,7 +67,13 @@ def _reject_constant(value: str) -> None:
     raise InvalidResponse("JSON 不能包含 NaN 或 Infinity。")
 
 
-def parse_response(raw: str) -> tuple[Action, ...]:
+@dataclass(frozen=True)
+class Decision:
+    summary: str
+    actions: tuple[Action, ...]
+
+
+def parse_decision(raw: str) -> Decision:
     """严格解析整个 JSON 对象；任何一个动作无效则全部拒绝。"""
     if not isinstance(raw, str) or not raw.strip():
         raise InvalidResponse("响应不能为空，请返回包含 actions 的 JSON 对象。")
@@ -75,8 +81,10 @@ def parse_response(raw: str) -> tuple[Action, ...]:
         payload = json.loads(raw, object_pairs_hook=_unique_object, parse_constant=_reject_constant)
     except (json.JSONDecodeError, RecursionError):
         raise InvalidResponse("响应必须是完整 JSON，不要添加 Markdown 标记或解释文字。") from None
-    if not isinstance(payload, dict) or set(payload) != {"actions"}:
-        raise InvalidResponse("响应必须是只包含 actions 字段的 JSON 对象。")
+    if not isinstance(payload, dict) or set(payload) != {"decision_summary", "actions"}:
+        raise InvalidResponse("响应必须只包含 decision_summary 和 actions 两个字段。")
+    if not isinstance(payload["decision_summary"], str) or not payload["decision_summary"].strip():
+        raise InvalidResponse("decision_summary 必须是非空字符串，简短说明本次决策。")
     if not isinstance(payload["actions"], list) or not payload["actions"]:
         raise InvalidResponse("actions 必须是非空动作列表；主动等待请使用 WAIT。")
     actions = []
@@ -101,7 +109,11 @@ def parse_response(raw: str) -> tuple[Action, ...]:
             actions.append(Action(kind, text=item.get("text")))
     result = tuple(actions)
     validate_actions(result)
-    return result
+    return Decision(payload["decision_summary"], result)
+
+
+def parse_response(raw: str) -> tuple[Action, ...]:
+    return parse_decision(raw).actions
 
 
 @dataclass(frozen=True)

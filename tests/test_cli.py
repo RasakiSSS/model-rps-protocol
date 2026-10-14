@@ -24,12 +24,13 @@ class CliTests(unittest.TestCase):
         env = dict(os.environ)
         env.pop("PYTHONIOENCODING", None)
         for scenario, result in expected.items():
-            with self.subTest(scenario=scenario):
+            with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as directory:
                 process = subprocess.run(
-                    [sys.executable, "-m", "model_rps", "--scenario", scenario],
+                    [sys.executable, "-m", "model_rps", "--mode", "demo", "--scenario", scenario,
+                     "--max-games", "1", "--log-dir", directory],
                     capture_output=True, text=True, encoding="utf-8", env=env, timeout=15,
                 )
-                self.assertEqual(process.returncode, 0, process.stderr)
+                self.assertEqual(process.returncode, 3 if scenario == "draw" else 0, process.stderr)
                 self.assertIn(result, process.stdout)
                 if scenario in ("draw", "forfeit", "deadline"):
                     for remaining in (10, 2, 1):
@@ -51,7 +52,7 @@ class CliTests(unittest.TestCase):
             path.write_text('DEEPSEEK_API_KEY = ""\nOPENAI_API_KEY = ""\n', encoding="utf-8")
             output = io.StringIO()
             with patch("model_rps.cli.httpx.AsyncClient") as client, contextlib.redirect_stderr(output):
-                result = main(["--mode", "live", "--secrets-file", str(path)])
+                result = main(["--secrets-file", str(path)])
             self.assertEqual(result, 2)
             client.assert_not_called()
             self.assertIn("DEEPSEEK_API_KEY", output.getvalue())
@@ -87,7 +88,7 @@ class CliTests(unittest.TestCase):
         self.assertEqual(status, 2)
         self.assertIn("请求超时", output.getvalue())
 
-    def test_live_mode_technical_failure_has_nonzero_exit_and_no_secret(self):
+    def test_default_mode_uses_real_adapter_and_hides_secrets_on_failure(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "local_secrets.py"
             path.write_text('DEEPSEEK_API_KEY = "test-a"\nOPENAI_API_KEY = "test-b"\n', encoding="utf-8")
@@ -96,7 +97,8 @@ class CliTests(unittest.TestCase):
             ))
             output = io.StringIO()
             with patch("model_rps.cli.httpx.AsyncClient", return_value=client), contextlib.redirect_stdout(output):
-                status = main(["--mode", "live", "--secrets-file", str(path)])
+                status = main(["--secrets-file", str(path),
+                               "--log-dir", str(Path(directory) / "logs")])
             self.assertEqual(status, 1)
             self.assertIn("技术异常中止", output.getvalue())
             self.assertNotIn("test-a", output.getvalue())
