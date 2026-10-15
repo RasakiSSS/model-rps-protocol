@@ -1,6 +1,7 @@
 """每次运行的五份 UTF-8 日志；记录后立即 flush，私有日志不参与模型输入。"""
 
 import json
+import unicodedata
 from contextlib import ExitStack
 from datetime import datetime
 from pathlib import Path
@@ -68,26 +69,79 @@ class RunLogs:
         for line in text.splitlines():
             self._write("chat", self.redact(f"[{timestamp}][局 {game}][Tick {tick}] {line}"))
 
+    def _thought(self, player: str, record: dict) -> None:
+        """人类可读的私有记录；完整事件另存 debug.log，正文缩进避免伪造标题。"""
+        record = self.redact_value(named_data(record, self.names) if self.names else record)
+
+        def readable(value) -> str:
+            text = str(value).replace("\r\n", "\n").replace("\r", "\n").replace("\t", "    ")
+            return "".join(f"\\u{ord(char):04x}" if char != "\n" and unicodedata.category(char).startswith("C")
+                           else char for char in text)
+
+        def inline(value) -> str:
+            return readable(value).replace("\n", "\\n")
+
+        def paragraph(label: str, value) -> str:
+            return label + "\n" + "\n".join("    " + line for line in readable(value).split("\n"))
+
+        kind = record["kind"]
+        phase = "赛后复盘" if record.get("phase") == "review" else f"第 {record['game']} 局 · Tick {record['tick']}"
+        title = {"reasoning": "接口思考", "decision": "策略分析与行动", "review": "复盘结果",
+                 "request_end": "请求未完成"}[kind]
+        timestamp = datetime.now().astimezone().isoformat(timespec="seconds")
+        lines = ["═" * 60, f"{phase} · 第 {record['attempt']} 次请求 · {title}",
+                 f"模型：{inline(record['player'])}  |  时间：{timestamp}"]
+        if kind == "reasoning":
+            status = {"returned": "已返回思考文本", "not_returned": "接口未返回思考文本",
+                      "invalid_field": "接口思考字段格式无效"}.get(record.get("status"), record.get("status"))
+            tokens = record.get("reasoning_tokens")
+            lines.append(f"状态：{inline(status)}  |  思考等级：{inline(record.get('requested_thinking', '未提供'))}")
+            lines.append(f"思考 token：{tokens if tokens is not None else '未提供'}  |  结束原因：{inline(record.get('finish_reason') or '未提供')}")
+            lines.append("可见性：仅私有日志；不进入后续请求或赛后公开记录。")
+            if record.get("content"):
+                lines.append(paragraph("思考内容：", record["content"]))
+            lines.append("注：收到思考文本不代表最终动作或复盘通过校验。")
+        elif kind == "decision":
+            lines.append("状态：通过校验；动作是否执行以 chat.log 的裁判记录为准。")
+            source = "接口思考" if record.get("analysis_source") == "reasoning" else "正文策略分析"
+            lines.append(f"分析来源：{source}")
+            if record.get("summary") is not None:
+                lines.append(paragraph("正文策略分析：", record["summary"]))
+            else:
+                lines.append("正文策略分析：未提供；使用本次请求的接口思考，见上方记录。")
+            lines.append("拟执行动作：")
+            gestures = {"Rock": "石头", "Paper": "布", "Scissors": "剪刀"}
+            for index, action in enumerate(record.get("actions", ()), 1):
+                if action["type"] == "SAY":
+                    lines.append(paragraph(f"  {index}. SAY · 发言：", action["text"]))
+                elif action["type"] == "MOVE":
+                    lines.append(f"  {index}. MOVE · 出拳：{gestures[action['move']]}（{action['move']}）")
+                else:
+                    lines.append(f"  {index}. WAIT · 等待")
+        elif kind == "review":
+            lines.append("状态：复盘完成")
+            for field, label in (("assessment", "整体评价："), ("key_moments", "关键决策："),
+                                 ("improvements", "改进建议：")):
+                lines.append(paragraph(label, record["review"][field]))
+        else:
+            status = "已取消" if record.get("status") == "cancelled" else "请求失败或响应无效"
+            lines.append(f"状态：{status}；本次未取得有效{'复盘' if record.get('phase') == 'review' else '动作'}。")
+            if record.get("error"):
+                lines.append(paragraph("原因：", record["error"]))
+            if record.get("correction"):
+                lines.append(paragraph("纠错反馈：", record["correction"]))
+            if "will_retry" in record:
+                lines.append("后续：将重试。" if record["will_retry"] else "后续：不再重试。")
+        self._write((player, "thought"), "\n".join(lines) + "\n")
+
     def request(self, game: int, record: dict) -> None:
         player = record["player"]
         entry = {"game": game, **record}
-        if record["kind"] == "reasoning":
-            self._json((player, "thought"), entry)
-            self._json((player, "debug"), entry)
-        elif record.get("phase") == "review":
-            self._json((player, "debug"), entry)
-            if record["kind"] == "review":
-                self._json((player, "thought"), entry)
-        elif record["kind"] == "decision":
-            self._json((player, "thought"), entry)
-        else:
-            self._json((player, "debug"), entry)
-            if record["kind"] == "request_end" and record["status"] != "valid":
-                self._json((player, "thought"), {
-                    "game": game, "player": player, "tick": record["tick"],
-                    "attempt": record["attempt"], "kind": "no_decision",
-                    "status": record["status"], "summary": None,
-                })
+        self._json((player, "debug"), entry)
+        if record["kind"] in ("reasoning", "decision", "review") or (
+            record["kind"] == "request_end" and record["status"] != "valid"
+        ):
+            self._thought(player, entry)
 
     def lifecycle(self, kind: str, **data) -> None:
         for player in ("A", "B"):

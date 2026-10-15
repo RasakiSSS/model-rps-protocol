@@ -99,7 +99,8 @@ class NamedCLITests(unittest.IsolatedAsyncioTestCase):
                 run, = (root / 'logs').iterdir()
                 self.assertEqual({p.name for p in run.iterdir()}, {'chat.log', *(log_directory(n) for n in names.values())})
                 for name in names.values():
-                    for file in (run / log_directory(name)).glob('*.log'):
+                    self.assertIn(f'模型：{name}', (run / log_directory(name) / 'thought.log').read_text(encoding='utf-8'))
+                    for file in (run / log_directory(name)).glob('debug.log'):
                         for line in file.read_text(encoding='utf-8').splitlines():
                             row = json.loads(line)
                             check(row)

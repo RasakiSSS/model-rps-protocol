@@ -108,7 +108,7 @@ class PostmatchTests(unittest.TestCase):
             chat = (root / "chat.log").read_text(encoding="utf-8")
             self.assertLess(chat.index("赢得 BO3"), chat.index("赛后公开"))
             for player in (OPENAI.model, DEEPSEEK.model):
-                thoughts = [json.loads(s) for s in (root / f"{player}/thought.log").read_text(encoding="utf-8").splitlines()]
+                thoughts = [json.loads(s) for s in (root / f"{player}/debug.log").read_text(encoding="utf-8").splitlines()]
                 self.assertEqual(len([r for r in thoughts if r["kind"] == "decision"]), 4)
                 reviews = [r for r in thoughts if r["kind"] == "review"]
                 self.assertEqual(len(reviews), 1)

@@ -30,6 +30,47 @@ def records(path):
 
 
 class LogTests(unittest.TestCase):
+    def test_readable_thought_preserves_paragraphs_redacts_and_keeps_structured_debug(self):
+        with tempfile.TemporaryDirectory() as directory, RunLogs(Path(directory), secrets=("secret-key",),
+                                                                 names={"A": "模型甲", "B": "模型乙"}) as logs:
+            base = {"player": "A", "tick": 3, "attempt": 2, "phase": "game"}
+            logs.request(2, {**base, "kind": "reasoning", "status": "returned", "requested_thinking": "high",
+                             "reasoning_tokens": 0, "finish_reason": "stop",
+                             "content": "第一段 secret-key\n\n第二段\r\n伪标题\x1b[2J"})
+            logs.request(2, {**base, "kind": "decision", "status": "validated", "analysis_source": "reasoning",
+                             "summary": None, "actions": [{"type": "MOVE", "move": "Paper"}]})
+            text = (logs.path / "模型甲/thought.log").read_text(encoding="utf-8")
+            self.assertIn("第 2 局 · Tick 3 · 第 2 次请求 · 接口思考", text)
+            self.assertIn("模型：模型甲", text)
+            self.assertIn("    第一段 [REDACTED]\n    \n    第二段\n    伪标题\\u001b[2J", text)
+            self.assertNotIn("secret-key", text)
+            self.assertNotIn("\x1b", text)
+            self.assertIn("思考 token：0", text)
+            self.assertIn("MOVE · 出拳：布（Paper）", text)
+            self.assertIn("动作是否执行", text)
+            self.assertIn("正文策略分析：未提供", text)
+            debug = records(logs.path / "模型甲/debug.log")
+            self.assertEqual([r["kind"] for r in debug], ["reasoning", "decision"])
+            self.assertEqual(debug[0]["content"], "第一段 [REDACTED]\n\n第二段\r\n伪标题\x1b[2J")
+            self.assertIsNone(debug[1]["summary"])
+            self.assertEqual((logs.path / "模型乙/thought.log").read_text(encoding="utf-8"), "")
+
+    def test_readable_missing_reasoning_and_failed_review_are_explicit(self):
+        with tempfile.TemporaryDirectory() as directory, RunLogs(Path(directory)) as logs:
+            base = {"player": "B", "tick": 0, "attempt": 3, "phase": "review"}
+            logs.request(0, {**base, "kind": "reasoning", "status": "not_returned", "requested_thinking": "high",
+                             "reasoning_tokens": None, "finish_reason": "length", "content": None})
+            logs.request(0, {**base, "kind": "request_end", "status": "rejected", "error": "模型输出未完整结束",
+                             "correction": "请重新返回完整复盘 JSON。", "will_retry": False})
+            text = (logs.path / "player_b/thought.log").read_text(encoding="utf-8")
+            self.assertIn("赛后复盘 · 第 3 次请求", text)
+            self.assertIn("接口未返回思考文本", text)
+            self.assertIn("思考 token：未提供", text)
+            self.assertIn("结束原因：length", text)
+            self.assertIn("本次未取得有效复盘", text)
+            self.assertIn("后续：不再重试", text)
+            self.assertIn("模型输出未完整结束", text)
+
     def test_bo3_cli_writes_five_files_and_match_results(self):
         with tempfile.TemporaryDirectory() as directory:
             with contextlib.redirect_stdout(io.StringIO()):
@@ -52,10 +93,14 @@ class LogTests(unittest.TestCase):
                 result = next(r for r in debug if r["kind"] == "match_end")
                 self.assertEqual(result["wins"], {"模拟玩家1": 0, "模拟玩家2": 2})
                 self.assertEqual(result["games_played"], 2)
-                thought = records(root / f"{player}/thought.log")
+                thought = [r for r in debug if r["kind"] in ("decision", "review")]
                 self.assertEqual({r["game"] for r in thought if r["kind"] == "decision"}, {1, 2})
                 self.assertEqual(len([r for r in thought if r["kind"] == "review"]), 1)
                 self.assertTrue(all(r["player"] == player for r in thought))
+                readable = (root / f"{player}/thought.log").read_text(encoding="utf-8")
+                self.assertIn("第 2 局 · Tick", readable)
+                self.assertIn("赛后复盘 · 第 1 次请求 · 复盘结果", readable)
+                self.assertIn("整体评价：", readable)
 
     def test_unique_directories_flush_and_redact_both_keys(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -145,9 +190,11 @@ class AsyncLogTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual([r["usage"] for r in b if r["kind"] == "usage"],
                                  [{"prompt_tokens": 100, "completion_tokens": 25}] * 2)
                 self.assertIn("decision_summary", next(r for r in a if r["kind"] == "request_start" and r["attempt"] == 3)["correction"])
-                thoughts = records(logs.path / "player_a/thought.log")
-                self.assertEqual([r["kind"] for r in thoughts], ["no_decision", "no_decision", "decision", "decision"])
-                self.assertEqual(thoughts[-1]["summary"], "PRIVATE-DECISION")
+                thoughts = (logs.path / "player_a/thought.log").read_text(encoding="utf-8")
+                self.assertEqual(thoughts.count("· 请求未完成"), 2)
+                self.assertEqual(thoughts.count("· 策略分析与行动"), 2)
+                self.assertIn("PRIVATE-DECISION", thoughts)
+                self.assertEqual([r for r in a if r["kind"] == "decision"][-1]["summary"], "PRIVATE-DECISION")
                 chat = (logs.path / "chat.log").read_text(encoding="utf-8")
                 self.assertNotIn("PRIVATE-DECISION", chat)
                 self.assertNotIn("Paper", chat.split("→")[0])

@@ -127,7 +127,10 @@ class ThinkingTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIn(f"参赛模型：{OPENAI.model} vs {DEEPSEEK.model}", output.getvalue())
                 root, = (path / "logs").iterdir()
                 for player, mode in ((OPENAI.model, a_mode), (DEEPSEEK.model, b_mode)):
-                    rows = [json.loads(s) for s in (root / f"{player}/thought.log").read_text(encoding="utf-8").splitlines()]
+                    rows = [json.loads(s) for s in (root / f"{player}/debug.log").read_text(encoding="utf-8").splitlines()]
+                    readable = (root / f"{player}/thought.log").read_text(encoding="utf-8")
+                    self.assertEqual("NATIVE-" in readable, mode != "off")
+                    self.assertIn("赛后复盘", readable)
                     native = [r for r in rows if r["kind"] == "reasoning"]
                     decisions = [r for r in rows if r["kind"] == "decision"]
                     self.assertEqual(len(decisions), 2)
