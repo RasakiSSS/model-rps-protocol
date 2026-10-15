@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Callable
 
-from .game import EndReason, Event, GameState, MovePolicy, PlayerId
+from .game import EndReason, Event, GameState, Initiative, MovePolicy, PlayerId
 from .players import MatchPlayer
 from .runner import RequestPolicy, run_game
 
@@ -14,9 +14,13 @@ class MatchConfig:
     best_of: int = 1
     max_games: int | None = None
     move_policy: MovePolicy = MovePolicy.LOCKED
+    initiative: Initiative = Initiative.SIMULTANEOUS
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "move_policy", MovePolicy(self.move_policy))
+        object.__setattr__(self, "initiative", Initiative(self.initiative))
+        if self.initiative == Initiative.ALTERNATING and self.move_policy != MovePolicy.LOCKED:
+            raise ValueError("实验性 alternating 模式仅支持 locked 出拳规则。")
         if type(self.best_of) is not int or self.best_of < 1 or self.best_of % 2 != 1:
             raise ValueError("BO 必须是正奇数，例如 1、3、5。")
         if self.max_games is None:
@@ -66,6 +70,8 @@ async def run_match(
             "max_games": config.max_games, "wins": {"A": wins[0], "B": wins[1]},
             "draws": draws, "last_game": last_game,
             "move_policy": config.move_policy.value,
+            "initiative": config.initiative.value,
+            "first_player": ("A" if number % 2 else "B") if config.initiative == Initiative.ALTERNATING else None,
         }
         for player in (a, b):
             player.start_game(context)
@@ -73,6 +79,7 @@ async def run_match(
             on_start(number)
         state = await run_game(
             a, b, policy=policy, move_policy=config.move_policy,
+            initiative=config.initiative, first_player="A" if number % 2 else "B",
             on_event=(lambda event: on_event(number, event)) if on_event else None,
             on_request=(lambda record: on_request(number, record)) if on_request else None,
         )

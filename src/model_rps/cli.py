@@ -54,6 +54,12 @@ class Console:
                 self.write(f"\n── 结算 Tick {event.tick}（最后一次行动机会）──")
             else:
                 self.write(f"\n── Tick {event.tick}/{MAX_TICKS} ──")
+        elif event.kind == "turn":
+            self.write(f"\n── 行动 Tick {event.tick}/{MAX_TICKS * 2} · {name} 第 {event.text}/{MAX_TICKS} 次行动 ──")
+        elif event.kind == "turn_reminder":
+            self.write(f"System：{name}，{event.text}")
+        elif event.kind == "move_ignored":
+            self.write(f"System：{name} 出拳已锁定，本次 MOVE 无效；保留原拳型。")
         elif event.kind == "say":
             self.write(f"{name}：{display_text(event.text)}")
         elif event.kind in ("commit", "revise"):
@@ -126,7 +132,8 @@ def make_parser(config: dict | None = None) -> argparse.ArgumentParser:
     parser.add_argument("--timeout", type=float, default=RequestPolicy().timeout, help="每次请求的总超时秒数")
     parser.add_argument("--retry-delay", type=float, default=1, help="真实模式重试间隔秒数，默认 1")
     parser.add_argument("--max-output-tokens", type=int, default=20000, help="对局与复盘单次输出上限，默认 20000")
-    parser.add_argument("--initiative", choices=("simultaneous",), default="simultaneous", help="当前仅支持同时决策")
+    parser.add_argument("--initiative", choices=("simultaneous", "alternating"), default="simultaneous",
+                        help="simultaneous 同时决策；alternating 实验性轮流行动，仅支持 locked")
     parser.add_argument("--bo", type=int, default=1, help="正奇数；BO N 先赢 N//2+1 局，默认 BO1")
     parser.add_argument("--max-games", type=int, help="包含平局的实际总局数上限，默认 10×BO")
     parser.add_argument("--log-dir", type=Path, default=Path("logs"), help="日志根目录，默认 logs")
@@ -153,7 +160,7 @@ async def play(args: argparse.Namespace) -> int:
     settings = RuntimeConfig.from_args(args)
     policy = RequestPolicy(timeout=settings.timeout_seconds,
                            retry_delay=0 if settings.mode == "demo" else settings.retry_delay_seconds)
-    config = MatchConfig(settings.best_of, settings.max_games, MovePolicy(settings.move_policy))
+    config = MatchConfig(settings.best_of, settings.max_games, MovePolicy(settings.move_policy), settings.initiative)
     thinking = {"A": settings.gpt.thinking, "B": settings.deepseek.thinking}
     if settings.mode == "demo" and any(mode != "off" for mode in thinking.values()):
         raise ValueError("思考开关仅用于真实模型；demo 使用预设脚本，请保持双方思考为 off。")
@@ -169,6 +176,8 @@ async def play(args: argparse.Namespace) -> int:
         console.write(f"System：{'模拟' if settings.mode == 'demo' else '真实模型'}比赛 BO{config.best_of}，"
                       f"先胜 {config.target_wins} 局；实际最多 {config.max_games} 局。")
         console.write(f"System：参赛模型：{console.names['A']} vs {console.names['B']}。")
+        console.write("System：实验性 alternating：双方轮流行动，每方最多 20 次；每局交换先手。"
+                      if settings.initiative == "alternating" else "System：simultaneous：双方按同一 Tick 开始状态同时行动。")
         console.write("System：出拳规则 locked：首次提交后锁定；双方提交齐全的当前 Tick 结束时结算。"
                       if config.move_policy == MovePolicy.LOCKED else
                       "System：出拳规则 revisable：允许改拳；双方提交齐全后的下一 Tick 结算。")
@@ -182,7 +191,10 @@ async def play(args: argparse.Namespace) -> int:
         def start(number):
             console.game, console.tick = number, 0
             console.write(f"\nSystem：第 {number} 局开始，Tick 与出拳状态已重置；保留本场比赛上下文。")
-            logs.lifecycle("game_start", game=number)
+            first = ("A" if number % 2 else "B") if settings.initiative == "alternating" else None
+            if first:
+                console.write(f"System：本局先手：{console.names[first]}。")
+            logs.lifecycle("game_start", game=number, first_player=first, initiative=settings.initiative)
 
         def end(number, state, wins, draws):
             archive.finish_game(number, state)
@@ -190,7 +202,7 @@ async def play(args: argparse.Namespace) -> int:
             console.write(f"System：比分 {console.names['A']} {wins[0]} : {wins[1]} {console.names['B']}；平局 {draws} 局。")
             logs.lifecycle("game_end", game=number, reason=state.result.reason,
                            winner=state.result.winner, wins=wins, draws=draws,
-                           completed_ticks=state.completed_ticks)
+                           completed_ticks=state.completed_ticks, turns={"A": state.turns[0], "B": state.turns[1]})
 
         def request(number, record):
             logs.request(number, record)
@@ -219,6 +231,8 @@ async def play(args: argparse.Namespace) -> int:
                     actions = json.dumps(decision["actions"], ensure_ascii=False)
                     analysis = decision["summary"] or "未提供正文分析；接口思考已记录于私有日志。"
                     console.write(f"{label}｜动作：{display_text(actions)}｜分析：{display_text(analysis)}")
+                    if decision["ignored_actions"]:
+                        console.write(f"{label}｜锁定后忽略的 MOVE：{display_text(json.dumps(decision['ignored_actions'], ensure_ascii=False))}")
             console.game, console.tick = 0, 0
             console.write("\nSystem：赛后复盘开始，双方各自分析完整记录。")
             logs.lifecycle("review_start")

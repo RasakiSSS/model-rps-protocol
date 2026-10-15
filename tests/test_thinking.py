@@ -205,7 +205,7 @@ class ThinkingTests(unittest.IsolatedAsyncioTestCase):
             state = await run_game(player, ScriptedPlayer([decision("Rock")]), policy=FAST, on_request=events.append)
         self.assertEqual(state.result.winner, "A")
         self.assertEqual(len(bodies), 3)
-        self.assertIn("WAIT 必须是唯一动作", json.loads(bodies[1]["messages"][-1]["content"])["correction"])
+        self.assertIn("必须且只能有一个 MOVE 或 WAIT", json.loads(bodies[1]["messages"][-1]["content"])["correction"])
         self.assertIn("未返回思考文本", json.loads(bodies[2]["messages"][-1]["content"])["correction"])
         self.assertNotIn("PRIVATE-ONLY-FIRST-ATTEMPT", json.dumps(bodies))
         self.assertEqual(len([r for r in events if r["kind"] == "decision" and r["player"] == "A"]), 1)

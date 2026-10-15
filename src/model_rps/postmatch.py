@@ -25,12 +25,16 @@ class MatchArchive:
 
     def finish_game(self, number: int, state: GameState) -> None:
         decisions = [
-            {key: record[key] for key in ("game", "tick", "player", "attempt", "summary", "actions")}
+            {**{key: record[key] for key in ("game", "tick", "player", "attempt", "summary", "actions")},
+             "ignored_actions": record.get("ignored_actions", [])}
             for record in self._decisions
             if record["game"] == number and record["tick"] <= state.completed_ticks
         ]
         self._games.append({
             "game": number, "completed_ticks": state.completed_ticks,
+            "initiative": state.initiative.value,
+            "first_player": state.first_player if state.initiative.value == "alternating" else None,
+            "turns": {"A": state.turns[0], "B": state.turns[1]},
             "result": {"reason": state.result.reason.value, "winner": state.result.winner},
             "events": [event.to_dict() for event in state.events],
             "decisions": sorted(decisions, key=lambda r: (r["tick"], r["player"])),
@@ -43,6 +47,7 @@ class MatchArchive:
         return deepcopy({
             "best_of": config.best_of, "target_wins": config.target_wins, "max_games": config.max_games,
             "move_policy": config.move_policy.value,
+            "initiative": config.initiative.value,
             "result": {"status": result.status.value, "winner": result.winner,
                        "wins": {"A": result.wins[0], "B": result.wins[1]},
                        "draws": result.draws, "games_played": result.games_played},

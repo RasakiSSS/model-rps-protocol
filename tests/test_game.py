@@ -44,7 +44,7 @@ class GameTests(unittest.TestCase):
 
     def test_all_actions_processed_before_judging(self):
         actions = parse_response(json.dumps({"decision_summary":"测试决策说明","actions": [
-            {"type": "MOVE", "move": "Rock"}, {"type": "MOVE", "move": "Paper"},
+            {"type": "MOVE", "move": "Paper"},
             {"type": "SAY", "text": "出拳之后仍可说话"},
         ]}))
         state = advance(GameState(move_policy=MovePolicy.REVISABLE), move("Rock"), move("Rock"))
@@ -57,7 +57,7 @@ class GameTests(unittest.TestCase):
     def test_wait_and_say_preserve_previous_move(self):
         state = advance(GameState(move_policy=MovePolicy.REVISABLE), move("Rock"), WAIT)
         state = advance(state, WAIT, WAIT)
-        state = advance(state, (Action(ActionKind.SAY, text="继续等待"),), WAIT)
+        state = advance(state, (Action(ActionKind.SAY, text="继续等待"), *WAIT), WAIT)
         self.assertEqual(state.moves, (Gesture.ROCK, None))
         self.assertIsNone(state.result)
 
@@ -74,7 +74,7 @@ class GameTests(unittest.TestCase):
         self.assertEqual(b["remaining_ticks_including_current"], 19)
 
     def test_snapshot_serialization_cannot_modify_original_history(self):
-        state = advance(GameState(move_policy=MovePolicy.REVISABLE), (Action(ActionKind.SAY, text="hello"),), WAIT)
+        state = advance(GameState(move_policy=MovePolicy.REVISABLE), (Action(ActionKind.SAY, text="hello"), *WAIT), WAIT)
         view = state.view_for("A")
         payload = view.to_dict()
         payload["history"][0]["text"] = "changed"
@@ -199,7 +199,8 @@ class ResponseTests(unittest.TestCase):
             '{"decision_summary":"测试决策说明","actions":[]}', '{"decision_summary":"测试决策说明","actions":{}}', '{"decision_summary":"测试决策说明","actions":[null]}',
             '{"decision_summary":"测试决策说明","actions":[{"type":"WAIT"}],"extra":1}',
             '{"decision_summary":"测试决策说明","actions":[{"type":"WAIT","text":"wrong"}]}',
-            '{"decision_summary":"测试决策说明","actions":[{"type":"WAIT"},{"type":"SAY","text":"hello"}]}',
+            '{"decision_summary":"测试决策说明","actions":[{"type":"SAY","text":"hello"}]}',
+            '{"decision_summary":"测试决策说明","actions":[{"type":"MOVE","move":"Rock"},{"type":"MOVE","move":"Paper"}]}',
             '{"decision_summary":"测试决策说明","actions":[{"type":"WAIT"},{"type":"WAIT"}]}',
             '{"decision_summary":"测试决策说明","actions":[{"type":"MOVE","move":"Lizard"}]}',
             '{"decision_summary":"测试决策说明","actions":[{"type":"MOVE","move":null}]}',

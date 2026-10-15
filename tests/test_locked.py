@@ -41,22 +41,24 @@ class LockedRulesTests(unittest.TestCase):
                     self.assertIsNone(state.settlement_tick)
                     self.assertEqual([e.kind for e in state.events], ["commit", "say", "commit", "reveal", "reveal"])
 
-    def test_repeated_and_multiple_moves_reject_whole_batch(self):
+    def test_locked_moves_ignored_but_multiple_moves_rejected(self):
         original = advance(GameState(), parse_response(move("Rock")), WAIT)
         for gesture in Gesture:
-            actions = parse_response(response({"type": "SAY", "text": "不应公开"}, {"type": "MOVE", "move": gesture}))
-            with self.subTest(gesture=gesture), self.assertRaises(InvalidResponse):
-                advance(original, actions, parse_response(move("Paper")))
+            actions = parse_response(response({"type": "SAY", "text": "仍可公开"}, {"type": "MOVE", "move": gesture}))
+            with self.subTest(gesture=gesture):
+                state = advance(original, actions, parse_response(move("Paper")))
+                self.assertEqual(state.moves, (Gesture.ROCK, Gesture.PAPER))
+                self.assertEqual(state.result.winner, "B")
+                self.assertIn("仍可公开", [e.text for e in state.events])
+                self.assertTrue(any(e.kind == "move_ignored" for e in state.events))
             self.assertEqual(original.moves, (Gesture.ROCK, None))
-            self.assertNotIn("不应公开", repr(original.events))
         for gesture in Gesture:
-            actions = parse_response(response({"type": "MOVE", "move": "Rock"}, {"type": "MOVE", "move": gesture}))
             with self.assertRaises(InvalidResponse):
-                advance(GameState(), actions, WAIT)
+                parse_response(response({"type": "MOVE", "move": "Rock"}, {"type": "MOVE", "move": gesture}))
 
     def test_locked_player_can_chat_and_wait_without_revealing_move(self):
         state = advance(GameState(), parse_response(move("Paper")), WAIT)
-        state = advance(state, (Action(ActionKind.SAY, text="继续交流"),), WAIT)
+        state = advance(state, (Action(ActionKind.SAY, text="继续交流"), *WAIT), WAIT)
         state = advance(state, WAIT, WAIT)
         a, b = state.view_for("A").to_dict(), state.view_for("B").to_dict()
         self.assertTrue(a["own_move_locked"])
@@ -96,20 +98,20 @@ class LockedRulesTests(unittest.TestCase):
 
 
 class LockedFlowTests(unittest.IsolatedAsyncioTestCase):
-    async def test_illegal_revision_retries_same_view_and_keeps_successful_peer(self):
-        invalid = response({"type": "SAY", "text": "不应执行的发言"}, {"type": "MOVE", "move": "Paper"})
+    async def test_locked_revision_ignored_without_retry_and_say_is_published(self):
+        invalid = response({"type": "SAY", "text": "继续交流"}, {"type": "MOVE", "move": "Paper"})
         a = ScriptedPlayer([move("Rock"), invalid, WAIT_RESPONSE])
         b = ScriptedPlayer([WAIT_RESPONSE, move("Scissors")])
         state = await run_game(a, b, policy=FAST)
         self.assertEqual(state.result.winner, "A")
-        self.assertEqual((len(a.requests), len(b.requests)), (3, 2))
-        self.assertIs(a.requests[1][0], a.requests[2][0])
-        self.assertIn("已经锁定", a.requests[2][1])
-        self.assertNotIn("Scissors", json.dumps(a.requests[2][0].to_dict()))
-        self.assertNotIn("不应执行的发言", repr(state.events))
+        self.assertEqual((len(a.requests), len(b.requests)), (2, 2))
+        self.assertEqual(state.moves, (Gesture.ROCK, Gesture.SCISSORS))
+        self.assertNotIn("Scissors", json.dumps(a.requests[1][0].to_dict()))
+        self.assertIn("继续交流", repr(state.events))
 
-    async def test_exhausted_revision_aborts_without_executing_peer_or_revealing(self):
-        a = ScriptedPlayer([move("Rock")] + [move("Rock")] * 3)
+    async def test_exhausted_invalid_actions_abort_without_executing_peer_or_revealing(self):
+        invalid = response({"type": "MOVE", "move": "Rock"}, {"type": "WAIT"})
+        a = ScriptedPlayer([move("Rock")] + [invalid] * 3)
         b = ScriptedPlayer([WAIT_RESPONSE, move("Paper")])
         state = await run_game(a, b, policy=FAST)
         self.assertEqual(state.result.reason, EndReason.TECHNICAL_ERROR)

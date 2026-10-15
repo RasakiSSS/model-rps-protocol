@@ -118,6 +118,8 @@ class RunLogs:
                     lines.append(f"  {index}. MOVE · 出拳：{gestures[action['move']]}（{action['move']}）")
                 else:
                     lines.append(f"  {index}. WAIT · 等待")
+            for action in record.get("ignored_actions", ()):
+                lines.append(f"忽略的 MOVE：{gestures[action['move']]}（{action['move']}）；原拳型已锁定，不作修改。")
         elif kind == "review":
             lines.append("状态：复盘完成")
             for field, label in (("assessment", "整体评价："), ("key_moments", "关键决策："),

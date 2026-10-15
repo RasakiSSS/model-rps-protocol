@@ -8,7 +8,8 @@ from time import perf_counter
 from dataclasses import dataclass
 from typing import Callable
 
-from .game import Action, Event, GameState, InvalidResponse, MovePolicy, PlayerView, abort, advance, parse_decision, validate_turn
+from .game import (Action, Event, GameState, Initiative, InvalidResponse, MovePolicy, PlayerView,
+                   abort, advance, advance_turn, ignored_move, parse_decision, validate_turn)
 from .diagnostics import LogError, TraceHandler, request_trace, trace
 from .players import ModelResponse, Player, PlayerError
 
@@ -55,7 +56,10 @@ async def _request_actions(player: Player, view: PlayerView, policy: RequestPoli
                 validate_turn(decision.actions, view.own_move, view.move_policy)
                 trace("decision", summary=decision.summary, status="validated",
                       analysis_source="reasoning" if has_reasoning else "decision_summary",
-                      actions=[action.to_dict() for action in decision.actions])
+                      actions=[action.to_dict() for action in decision.actions
+                               if not ignored_move(action, view.own_move, view.move_policy)],
+                      ignored_actions=[action.to_dict() for action in decision.actions
+                                       if ignored_move(action, view.own_move, view.move_policy)])
                 trace("request_end", status="valid", elapsed_seconds=perf_counter() - started)
                 return decision.actions
             except LogError:
@@ -93,12 +97,27 @@ async def _request_actions(player: Player, view: PlayerView, policy: RequestPoli
 
 async def run_game(a: Player, b: Player, *, policy: RequestPolicy | None = None,
                    move_policy: MovePolicy = MovePolicy.LOCKED,
+                   initiative: Initiative = Initiative.SIMULTANEOUS, first_player: str = "A",
                    on_event: EventHandler | None = None,
                    on_request: TraceHandler | None = None) -> GameState:
     policy = policy or RequestPolicy()
     emit = on_event or (lambda event: None)
-    state = GameState(move_policy=move_policy)
+    state = GameState(move_policy=move_policy, initiative=initiative, first_player=first_player)
     while state.result is None:
+        if state.initiative == Initiative.ALTERNATING:
+            identity = state.current_player
+            view = state.view_for(identity)
+            emit(Event(view.tick, "turn", identity, str(view.own_turn)))
+            try:
+                actions = await _request_actions(a if identity == "A" else b, view, policy, emit, on_request)
+            except TurnFailed as exc:
+                new_state = abort(state, exc.player, str(exc))
+            else:
+                new_state = advance_turn(state, identity, actions)
+            for event in new_state.events[len(state.events):]:
+                emit(event)
+            state = new_state
+            continue
         views = (state.view_for("A"), state.view_for("B"))
         emit(Event(views[0].tick, "tick", text="settlement" if views[0].is_settlement_tick else ""))
         tasks = [asyncio.create_task(_request_actions(player, view, policy, emit, on_request))

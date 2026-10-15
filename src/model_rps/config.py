@@ -85,7 +85,9 @@ class RuntimeConfig:
     def from_args(cls, args) -> RuntimeConfig:
         choice_value(args.mode, ("live", "demo"), "mode")
         choice_value(args.move_policy, ("locked", "revisable"), "move_policy")
-        choice_value(args.initiative, ("simultaneous",), "initiative（异步先后手尚未实现）")
+        choice_value(args.initiative, ("simultaneous", "alternating"), "initiative")
+        if args.initiative == "alternating" and args.move_policy != "locked":
+            raise ValueError("实验性 alternating 模式仅支持 locked 出拳规则。")
         number_value(args.timeout, "请求超时")
         number_value(args.retry_delay, "retry_delay_seconds", zero=True)
         number_value(args.max_output_tokens, "max_output_tokens", integer=True)
@@ -176,7 +178,7 @@ def load_config(path: Path = CONFIG_PATH, *, required: bool = False) -> dict:
     if "move_policy" in match:
         choice_value(match["move_policy"], ("locked", "revisable"), "match.move_policy")
     if "initiative" in match:
-        choice_value(match["initiative"], ("simultaneous",), "match.initiative（异步先后手尚未实现）")
+        choice_value(match["initiative"], ("simultaneous", "alternating"), "match.initiative")
     if "best_of" in match and match["best_of"] % 2 != 1:
         raise ValueError("match.best_of 必须为正奇数。")
     result = {}

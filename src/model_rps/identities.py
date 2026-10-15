@@ -18,7 +18,7 @@ def named_data(value, names: dict[str, str], field: str | None = None):
         if field == "wins" and len(value) == 2:
             return {names["A"]: value[0], names["B"]: value[1]}
         return [named_data(item, names) for item in value]
-    if field in ("player", "winner") and isinstance(value, str):
+    if field in ("player", "winner", "first_player") and isinstance(value, str):
         return names.get(value, value)
     return value
 

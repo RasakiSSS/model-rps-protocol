@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import Literal
 
@@ -27,6 +27,11 @@ class ActionKind(StrEnum):
 class MovePolicy(StrEnum):
     LOCKED = "locked"
     REVISABLE = "revisable"
+
+
+class Initiative(StrEnum):
+    SIMULTANEOUS = "simultaneous"
+    ALTERNATING = "alternating"
 
 
 class InvalidResponse(ValueError):
@@ -63,18 +68,16 @@ class Action:
 def validate_actions(actions: tuple[Action, ...]) -> None:
     if not actions or any(not isinstance(action, Action) for action in actions):
         raise InvalidResponse("actions 必须是非空动作列表。")
-    if len(actions) != 1 and any(action.kind == ActionKind.WAIT for action in actions):
-        raise InvalidResponse("WAIT 必须是唯一动作，不能与其他动作混用。")
+    if sum(action.kind in (ActionKind.MOVE, ActionKind.WAIT) for action in actions) != 1:
+        raise InvalidResponse("每轮必须且只能有一个 MOVE 或 WAIT；SAY 可同时出现。")
 
 
 def validate_turn(actions: tuple[Action, ...], own_move: Gesture | None, move_policy: MovePolicy) -> None:
     validate_actions(actions)
-    if move_policy == MovePolicy.LOCKED:
-        count = sum(action.kind == ActionKind.MOVE for action in actions)
-        if count and own_move is not None:
-            raise InvalidResponse("本局出拳已经锁定，不能再次 MOVE（包括相同拳型）；请使用 SAY 或单独 WAIT。")
-        if count > 1:
-            raise InvalidResponse("锁定模式每份响应最多一个 MOVE；整份响应未执行，请重新选择一次出拳。")
+
+
+def ignored_move(action: Action, own_move: Gesture | None, move_policy: MovePolicy) -> bool:
+    return action.kind == ActionKind.MOVE and own_move is not None and move_policy == MovePolicy.LOCKED
 
 
 def _unique_object(pairs: list[tuple[str, object]]) -> dict:
@@ -183,22 +186,32 @@ class PlayerView:
     history: tuple[Event, ...]
     settlement_tick: int | None = None
     move_policy: MovePolicy = MovePolicy.LOCKED
+    initiative: Initiative = Initiative.SIMULTANEOUS
+    first_player: PlayerId = "A"
+    own_turn: int = 1
 
     @property
     def is_settlement_tick(self) -> bool:
         return self.tick == self.settlement_tick
 
     def to_dict(self) -> dict:
+        alternating = self.initiative == Initiative.ALTERNATING
+        turn_limit = MAX_TICKS if alternating else self.settlement_tick or MAX_TICKS
         return {
             "player": self.player,
+            "initiative": self.initiative.value,
+            "first_player": self.first_player if alternating else None,
+            "own_turn": self.own_turn,
+            "max_turns_per_player": turn_limit,
+            "remaining_turns_including_current": turn_limit - self.own_turn + 1,
             "move_policy": self.move_policy.value,
             "own_move_locked": self.move_policy == MovePolicy.LOCKED and self.own_move is not None,
             "tick": self.tick,
-            "max_ticks": self.settlement_tick or MAX_TICKS,
-            "submission_deadline_tick": MAX_TICKS,
+            "max_ticks": MAX_TICKS * 2 if alternating else self.settlement_tick or MAX_TICKS,
+            "submission_deadline_tick": MAX_TICKS * 2 if alternating else MAX_TICKS,
             "settlement_tick": self.settlement_tick,
             "is_settlement_tick": self.is_settlement_tick,
-            "remaining_ticks_including_current": (self.settlement_tick or MAX_TICKS) - self.tick + 1,
+            "remaining_ticks_including_current": (MAX_TICKS * 2 if alternating else self.settlement_tick or MAX_TICKS) - self.tick + 1,
             "own_move": self.own_move.value if self.own_move is not None else None,
             "opponent_committed": self.opponent_committed,
             "history": [event.to_dict() for event in self.history],
@@ -213,9 +226,23 @@ class GameState:
     result: Result | None = None
     settlement_tick: int | None = None
     move_policy: MovePolicy = MovePolicy.LOCKED
+    initiative: Initiative = Initiative.SIMULTANEOUS
+    first_player: PlayerId = "A"
+    turns: tuple[int, int] = (0, 0)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "move_policy", MovePolicy(self.move_policy))
+        object.__setattr__(self, "initiative", Initiative(self.initiative))
+        if self.first_player not in ("A", "B"):
+            raise ValueError("先手必须是 A 或 B。")
+        if self.initiative == Initiative.ALTERNATING and self.move_policy != MovePolicy.LOCKED:
+            raise ValueError("实验性 alternating 模式仅支持 locked 出拳规则。")
+
+    @property
+    def current_player(self) -> PlayerId:
+        if self.completed_ticks % 2 == 0:
+            return self.first_player
+        return "B" if self.first_player == "A" else "A"
 
     def view_for(self, player: PlayerId) -> PlayerView:
         if self.result is not None:
@@ -224,7 +251,9 @@ class GameState:
             raise ValueError("玩家必须是 A 或 B。")
         index = 0 if player == "A" else 1
         return PlayerView(player, self.completed_ticks + 1, self.moves[index],
-                          self.moves[1 - index] is not None, self.events, self.settlement_tick, self.move_policy)
+                          self.moves[1 - index] is not None, self.events, self.settlement_tick, self.move_policy,
+                          self.initiative, self.first_player, self.turns[index] + 1 if self.initiative == Initiative.ALTERNATING
+                          else self.completed_ticks + 1)
 
 
 def judge(a: Gesture, b: Gesture) -> PlayerId | None:
@@ -237,6 +266,8 @@ def judge(a: Gesture, b: Gesture) -> PlayerId | None:
 
 def advance(state: GameState, a: tuple[Action, ...], b: tuple[Action, ...]) -> GameState:
     """先校验双方，再产生新状态；结算前的公开事件不携带真实拳型。"""
+    if state.initiative != Initiative.SIMULTANEOUS:
+        raise ValueError("轮流行动模式请逐方推进。")
     if state.result is not None or state.completed_ticks >= (state.settlement_tick or MAX_TICKS):
         raise ValueError("对局已经结束。")
     validate_turn(a, state.moves[0], state.move_policy)
@@ -249,6 +280,9 @@ def advance(state: GameState, a: tuple[Action, ...], b: tuple[Action, ...]) -> G
             if action.kind == ActionKind.SAY:
                 events.append(Event(tick, "say", player, action.text))
             elif action.kind == ActionKind.MOVE:
+                if ignored_move(action, moves[index], state.move_policy):
+                    events.append(Event(tick, "move_ignored", player))
+                    continue
                 kind = "commit" if moves[index] is None else "revise"
                 moves[index] = action.move
                 events.append(Event(tick, kind, player))
@@ -278,11 +312,48 @@ def advance(state: GameState, a: tuple[Action, ...], b: tuple[Action, ...]) -> G
                 events.append(Event(tick, "reveal", player, move.value))
     elif settlement_tick is None and tick in REMINDER_TICKS:
         events.append(Event(tick, "reminder", text=f"距离本局提交截止还剩 {MAX_TICKS - tick} Tick。"))
-    return GameState(tick, tuple(moves), state.events + tuple(events), result, settlement_tick, state.move_policy)
+    return replace(state, completed_ticks=tick, moves=tuple(moves), events=state.events + tuple(events),
+                   result=result, settlement_tick=settlement_tick, turns=(tick, tick))
+
+
+def advance_turn(state: GameState, player: PlayerId, actions: tuple[Action, ...]) -> GameState:
+    """轮流行动：只执行当前玩家的完整响应，随后即时公开并判定。"""
+    if state.initiative != Initiative.ALTERNATING or state.result is not None or state.completed_ticks >= MAX_TICKS * 2:
+        raise ValueError("当前状态不能推进轮流行动。")
+    if player != state.current_player:
+        raise ValueError("尚未轮到该玩家。")
+    index = 0 if player == "A" else 1
+    validate_turn(actions, state.moves[index], state.move_policy)
+    tick = state.completed_ticks + 1
+    moves, turns, events = list(state.moves), list(state.turns), []
+    for action in actions:
+        if action.kind == ActionKind.SAY:
+            events.append(Event(tick, "say", player, action.text))
+        elif action.kind == ActionKind.WAIT:
+            events.append(Event(tick, "wait", player))
+        elif ignored_move(action, moves[index], state.move_policy):
+            events.append(Event(tick, "move_ignored", player))
+        else:
+            moves[index] = action.move
+            events.append(Event(tick, "commit", player))
+    turns[index] += 1
+    result = None
+    if all(move is not None for move in moves):
+        result = Result(EndReason.SHOWDOWN, judge(moves[0], moves[1]))
+    elif all(turn >= MAX_TICKS for turn in turns):
+        result = Result(EndReason.FORFEIT, "A" if moves[0] is not None else "B") if any(
+            move is not None for move in moves) else Result(EndReason.NO_MOVES)
+    if result:
+        events.extend(Event(tick, "reveal", identity, move.value)
+                      for identity, move in zip(("A", "B"), moves) if move is not None)
+    elif turns[index] in REMINDER_TICKS:
+        events.append(Event(tick, "turn_reminder", player,
+                            f"本局已完成 {turns[index]} 次行动，剩余 {MAX_TICKS - turns[index]} 次行动机会。"))
+    return replace(state, completed_ticks=tick, moves=tuple(moves), turns=tuple(turns),
+                   events=state.events + tuple(events), result=result)
 
 
 def abort(state: GameState, player: PlayerId, message: str) -> GameState:
     """丢弃当前 Tick 的暂存动作，只保留此前完成的状态。"""
     event = Event(state.completed_ticks + 1, "error", player, message)
-    return GameState(state.completed_ticks, state.moves, state.events + (event,),
-                     Result(EndReason.TECHNICAL_ERROR), state.settlement_tick, state.move_policy)
+    return replace(state, events=state.events + (event,), result=Result(EndReason.TECHNICAL_ERROR))
