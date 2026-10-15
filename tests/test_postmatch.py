@@ -61,16 +61,16 @@ class PostmatchTests(unittest.TestCase):
 
         def handler(request):
             payload = json.loads(request.content)
-            player = "A" if payload["model"] == DEEPSEEK.model else "B"
+            player = "A" if payload["model"] == OPENAI.model else "B"
             context = json.loads(payload["messages"][-1]["content"])
             if payload["messages"][0]["content"] == REVIEW_PROMPT:
                 self.assertEqual(len(game_calls), 8)
                 review_calls.append((player, context))
                 review_attempts[player] += 1
                 self.assertEqual(payload.get("max_tokens", payload.get("max_completion_tokens")), 20000)
-                self.assertEqual(context["player"], player)
+                self.assertEqual(context["player"], payload["model"])
                 report = context["match"]
-                self.assertEqual(report["result"]["wins"], {"A": 2, "B": 0})
+                self.assertEqual(report["result"]["wins"], {OPENAI.model: 2, DEEPSEEK.model: 0})
                 self.assertEqual(len(report["games"]), 2)
                 decisions = [d for g in report["games"] for d in g["decisions"]]
                 self.assertEqual(len(decisions), 8)
@@ -95,7 +95,7 @@ class PostmatchTests(unittest.TestCase):
             client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
             output = io.StringIO()
             with patch("model_rps.cli.httpx.AsyncClient", return_value=client), contextlib.redirect_stdout(output):
-                status = main(["--move-policy", "revisable", "--bo", "3", "--log-dir", str(Path(directory) / "logs"), "--secrets-file", str(path)])
+                status = main(["--no-config", "--move-policy", "revisable", "--bo", "3", "--log-dir", str(Path(directory) / "logs"), "--secrets-file", str(path)])
             self.assertEqual(status, 0)
             self.assertEqual(review_attempts, {"A": 2, "B": 1})
             self.assertTrue(all(c["match"] == review_calls[0][1]["match"] for _, c in review_calls))
@@ -107,8 +107,8 @@ class PostmatchTests(unittest.TestCase):
             root, = (Path(directory) / "logs").iterdir()
             chat = (root / "chat.log").read_text(encoding="utf-8")
             self.assertLess(chat.index("赢得 BO3"), chat.index("赛后公开"))
-            for player in ("a", "b"):
-                thoughts = [json.loads(s) for s in (root / f"player_{player}/thought.log").read_text(encoding="utf-8").splitlines()]
+            for player in (OPENAI.model, DEEPSEEK.model):
+                thoughts = [json.loads(s) for s in (root / f"{player}/thought.log").read_text(encoding="utf-8").splitlines()]
                 self.assertEqual(len([r for r in thoughts if r["kind"] == "decision"]), 4)
                 reviews = [r for r in thoughts if r["kind"] == "review"]
                 self.assertEqual(len(reviews), 1)
@@ -120,7 +120,7 @@ class PostmatchTests(unittest.TestCase):
 
         def handler(request):
             payload = json.loads(request.content)
-            player = "A" if payload["model"] == DEEPSEEK.model else "B"
+            player = "A" if payload["model"] == OPENAI.model else "B"
             if payload["messages"][0]["content"] == REVIEW_PROMPT:
                 attempts[player] += 1
                 if player == "A":
@@ -137,17 +137,17 @@ class PostmatchTests(unittest.TestCase):
             client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
             output = io.StringIO()
             with patch("model_rps.cli.httpx.AsyncClient", return_value=client), contextlib.redirect_stdout(output):
-                status = main(["--move-policy", "revisable", "--max-games", "1", "--secrets-file", str(key_file), "--log-dir", str(Path(directory) / "logs")])
+                status = main(["--no-config", "--move-policy", "revisable", "--max-games", "1", "--secrets-file", str(key_file), "--log-dir", str(Path(directory) / "logs")])
             self.assertEqual(status, 4)
             self.assertEqual(attempts, {"A": 1, "B": 1})
             self.assertIn("赢得 BO1", output.getvalue())
-            self.assertIn("gpt-6-luna 复盘·整体评价", output.getvalue())
+            self.assertIn("deepseek-flash 复盘·整体评价", output.getvalue())
             self.assertNotIn("sensitive-server-body", output.getvalue())
             root, = (Path(directory) / "logs").iterdir()
-            rows = [json.loads(s) for s in (root / "player_a/debug.log").read_text(encoding="utf-8").splitlines()]
+            rows = [json.loads(s) for s in (root / "gpt-6-luna/debug.log").read_text(encoding="utf-8").splitlines()]
             result = next(r for r in rows if r["kind"] == "match_end")
-            self.assertEqual(result["wins"], [1, 0])
-            self.assertEqual(result["winner"], "A")
+            self.assertEqual(result["wins"], {OPENAI.model: 1, DEEPSEEK.model: 0})
+            self.assertEqual(result["winner"], OPENAI.model)
             self.assertFalse(next(r for r in rows if r["kind"] == "review_end")["complete"])
 
 

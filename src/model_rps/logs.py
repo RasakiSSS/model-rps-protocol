@@ -7,19 +7,21 @@ from pathlib import Path
 from uuid import uuid4
 
 from .diagnostics import LogError
+from .identities import log_directory, named_data
 
 
 class RunLogs:
-    def __init__(self, root: Path, *, secrets: tuple[str, ...] = ()) -> None:
+    def __init__(self, root: Path, *, secrets: tuple[str, ...] = (), names: dict[str, str] | None = None) -> None:
         self._stack = ExitStack()
         self._secrets = tuple(sorted({value.strip() for value in secrets if value.strip()}, key=len, reverse=True))
         self.path = root / (datetime.now().strftime("%Y%m%d_%H%M%S_%f") + "_" + uuid4().hex[:8])
         self._files = {}
+        self.names = dict(names) if names is not None else None
         try:
             self.path.mkdir(parents=True, exist_ok=False)
             self._files["chat"] = self._open(self.path / "chat.log")
             for player in ("A", "B"):
-                directory = self.path / f"player_{player.lower()}"
+                directory = self.path / (log_directory(self.names[player]) if self.names else f"player_{player.lower()}")
                 directory.mkdir()
                 for name in ("thought", "debug"):
                     self._files[player, name] = self._open(directory / f"{name}.log")
@@ -57,6 +59,8 @@ class RunLogs:
     def _json(self, key, record: dict) -> None:
         record = {"timestamp": datetime.now().astimezone().isoformat(timespec="milliseconds"), **record}
         # 先脱敏再编码，包含引号或反斜杠的密钥也不会破坏 JSON 行。
+        if self.names:
+            record = named_data(record, self.names)
         self._write(key, json.dumps(self.redact_value(record), ensure_ascii=False))
 
     def chat(self, text: str, *, game: int = 0, tick: int = 0) -> None:
@@ -67,7 +71,10 @@ class RunLogs:
     def request(self, game: int, record: dict) -> None:
         player = record["player"]
         entry = {"game": game, **record}
-        if record.get("phase") == "review":
+        if record["kind"] == "reasoning":
+            self._json((player, "thought"), entry)
+            self._json((player, "debug"), entry)
+        elif record.get("phase") == "review":
             self._json((player, "debug"), entry)
             if record["kind"] == "review":
                 self._json((player, "thought"), entry)

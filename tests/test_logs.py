@@ -33,29 +33,29 @@ class LogTests(unittest.TestCase):
     def test_bo3_cli_writes_five_files_and_match_results(self):
         with tempfile.TemporaryDirectory() as directory:
             with contextlib.redirect_stdout(io.StringIO()):
-                status = main(["--move-policy", "revisable", "--mode", "demo", "--bo", "3", "--log-dir", directory])
+                status = main(["--no-config", "--move-policy", "revisable", "--mode", "demo", "--bo", "3", "--log-dir", directory])
             self.assertEqual(status, 0)
             root, = Path(directory).iterdir()
             self.assertEqual({str(path.relative_to(root)).replace("\\", "/") for path in root.rglob("*.log")},
-                             {"chat.log", "player_a/thought.log", "player_a/debug.log",
-                              "player_b/thought.log", "player_b/debug.log"})
+                             {"chat.log", "模拟玩家1/thought.log", "模拟玩家1/debug.log",
+                              "模拟玩家2/thought.log", "模拟玩家2/debug.log"})
             chat = (root / "chat.log").read_text(encoding="utf-8")
             self.assertIn("第 2 局开始", chat)
             self.assertNotIn("第 3 局开始", chat)
-            self.assertIn("比分 A 0 : 2 B", chat)
+            self.assertIn("比分 模拟玩家1 0 : 2 模拟玩家2", chat)
             self.assertIn("赢得 BO3", chat)
             self.assertNotIn("预设动作", chat.split("赛后公开")[0])
             self.assertIn("预设动作", chat.split("赛后公开")[1])
             self.assertIn("赛后复盘结束", chat)
-            for player in ("a", "b"):
-                debug = records(root / f"player_{player}/debug.log")
+            for player in ("模拟玩家1", "模拟玩家2"):
+                debug = records(root / f"{player}/debug.log")
                 result = next(r for r in debug if r["kind"] == "match_end")
-                self.assertEqual(result["wins"], [0, 2])
+                self.assertEqual(result["wins"], {"模拟玩家1": 0, "模拟玩家2": 2})
                 self.assertEqual(result["games_played"], 2)
-                thought = records(root / f"player_{player}/thought.log")
+                thought = records(root / f"{player}/thought.log")
                 self.assertEqual({r["game"] for r in thought if r["kind"] == "decision"}, {1, 2})
                 self.assertEqual(len([r for r in thought if r["kind"] == "review"]), 1)
-                self.assertTrue(all(r["player"] == player.upper() for r in thought))
+                self.assertTrue(all(r["player"] == player for r in thought))
 
     def test_unique_directories_flush_and_redact_both_keys(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -78,7 +78,7 @@ class LogTests(unittest.TestCase):
             root = Path(directory) / "occupied"
             root.write_text("keep", encoding="utf-8")
             with contextlib.redirect_stderr(io.StringIO()):
-                status = main(["--move-policy", "revisable", "--mode", "demo", "--log-dir", str(root)])
+                status = main(["--no-config", "--move-policy", "revisable", "--mode", "demo", "--log-dir", str(root)])
             self.assertEqual(status, 1)
             self.assertEqual(root.read_text(encoding="utf-8"), "keep")
 
@@ -96,13 +96,13 @@ class LogTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             output = io.StringIO()
             with contextlib.redirect_stdout(output):
-                status = main(["--move-policy", "revisable", "--mode", "demo", "--scenario", "draw", "--bo", "3", "--max-games", "2", "--log-dir", directory])
+                status = main(["--no-config", "--move-policy", "revisable", "--mode", "demo", "--scenario", "draw", "--bo", "3", "--max-games", "2", "--log-dir", directory])
             self.assertEqual(status, 3)
             self.assertIn("比赛未决", output.getvalue())
             self.assertEqual(output.getvalue().count("本局提交截止还剩 10 Tick"), 2)
             for options in (["--bo", "2"], ["--bo", "3", "--max-games", "1"]):
                 with contextlib.redirect_stderr(io.StringIO()):
-                    self.assertEqual(main(["--move-policy", "revisable", *options, "--log-dir", directory]), 2)
+                    self.assertEqual(main(["--no-config", "--move-policy", "revisable", *options, "--log-dir", directory]), 2)
             self.assertEqual(len(list(Path(directory).iterdir())), 1)
 
 

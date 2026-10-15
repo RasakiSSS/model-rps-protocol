@@ -1,0 +1,29 @@
+# 复制为 config.toml 并填写两个 api_key。实际配置已被 Git 忽略。
+# 命令行参数 > 本文件 > 内置默认值；只写需要覆盖的字段即可。
+
+[app]
+mode = "live"                       # live / demo
+log_dir = "logs"                     # 相对于本配置文件；CLI --log-dir 相对于工作目录
+timeout_seconds = 120
+retry_delay_seconds = 1
+max_output_tokens = 20000            # 对局与复盘共用，包含思考生成额度
+
+[match]
+move_policy = "locked"               # locked / revisable
+best_of = 9                          # 正奇数，BO9 先胜5局
+# max_games = 90                     # 省略时按最终 best_of 的10倍计算，平局也计入
+initiative = "simultaneous"          # 当前只有此模式；异步先后手尚未实现
+
+[players.gpt]
+model = "gpt-5.6-sol"
+# name = "GPT-5.6 Sol"               # 可选显示名；省略时随 model 自动变化
+base_url = "https://ai.yuhuantin.icu/v1"
+api_key = ""                         # 填写该服务的密钥
+thinking = "high"                    # off / low / medium / high / xhigh / max
+
+[players.deepseek]
+model = "deepseek-flash"
+# name = "DeepSeek"
+base_url = "https://api.deepseek.com"
+api_key = ""
+thinking = "high"                    # off / low / high / max

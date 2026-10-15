@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Protocol
 from urllib.parse import urlsplit
 
@@ -12,11 +12,14 @@ import httpx
 
 from .game import MAX_TICKS, MovePolicy, PlayerView
 from .diagnostics import trace
+from .identities import named_data
 
 MAX_OUTPUT_TOKENS = 20000
+DEEPSEEK_THINKING_MODES = ("off", "low", "high", "max")
+OPENAI_THINKING_MODES = ("off", "low", "medium", "high", "xhigh", "max")
 SYSTEM_PROMPT_TEMPLATE = f"""你是一场自由猜拳博弈中的玩家。目标是在本场 BO 中先达到目标胜局数。
 System 是唯一裁判。石头 Rock 胜剪刀 Scissors，剪刀 Scissors 胜布 Paper，布 Paper 胜石头 Rock；相同拳型为平局。
-match.target_wins 是夺冠所需胜局，match.wins 分别记录 A/B 的累计胜局，match.draws 是平局数。
+match.target_wins 是夺冠所需胜局，match.wins 以玩家名称为键记录累计胜局，match.draws 是平局数。
 平局不增加胜局；达到实际总局数上限仍无人达标时比赛未决，不按暂时领先判冠军。
 
 状态与信息：
@@ -132,17 +135,35 @@ class ModelSpec:
     base_url: str
     token_parameter: str
     extra_body: dict = field(default_factory=dict)
+    thinking_api: str | None = None
+    thinking_mode: str = "off"
 
 
 DEEPSEEK = ModelSpec("DeepSeek V4.1 Flash", "deepseek-flash", "https://api.deepseek.com",
-                     "max_tokens", {"thinking": {"type": "disabled"}})
+                     "max_tokens", {"thinking": {"type": "disabled"}}, thinking_api="deepseek")
 OPENAI = ModelSpec("GPT-6 Luna", "gpt-6-luna", "https://ai.yuhuantin.icu/v1",
-                   "max_completion_tokens", {"reasoning_effort": "none"})
+                   "max_completion_tokens", {"reasoning_effort": "none"}, thinking_api="openai")
+
+
+def configure_thinking(spec: ModelSpec, mode: str) -> ModelSpec:
+    """显式选择服务参数；不改模型标识、提示词或共享的默认配置。"""
+    modes = {"deepseek": DEEPSEEK_THINKING_MODES, "openai": OPENAI_THINKING_MODES}
+    if spec.thinking_api not in modes or mode not in modes[spec.thinking_api]:
+        raise ValueError("该适配器不支持所选思考档位。")
+    body = dict(spec.extra_body)
+    if spec.thinking_api == "deepseek":
+        body["thinking"] = {"type": "disabled" if mode == "off" else "enabled"}
+        body.pop("reasoning_effort", None)
+        if mode != "off":
+            body["reasoning_effort"] = mode
+    else:
+        body["reasoning_effort"] = "none" if mode == "off" else mode
+    return replace(spec, extra_body=body, thinking_mode=mode)
 
 
 class ChatCompletionPlayer:
     def __init__(self, client: httpx.AsyncClient, spec: ModelSpec, api_key: str, *,
-                 max_output_tokens: int = MAX_OUTPUT_TOKENS) -> None:
+                 max_output_tokens: int = MAX_OUTPUT_TOKENS, names: dict[str, str] | None = None) -> None:
         if not isinstance(api_key, str) or not api_key.strip():
             raise ValueError("API key 未填写。")
         if any(ord(char) < 32 for char in api_key):
@@ -159,6 +180,7 @@ class ChatCompletionPlayer:
         self.spec = spec
         self._api_key = api_key.strip()
         self.max_output_tokens = max_output_tokens
+        self.names = dict(names) if names is not None else {"A": "A", "B": "B"}
         self.start_match()
 
     def start_match(self) -> None:
@@ -174,7 +196,7 @@ class ChatCompletionPlayer:
         context = {"state": view.to_dict(), "correction": feedback}
         if self._match_context is not None:
             context["match"] = self._match_context
-        user_message = {"role": "user", "content": json.dumps(context, ensure_ascii=False)}
+        user_message = {"role": "user", "content": json.dumps(named_data(context, self.names), ensure_ascii=False)}
         content = await self._complete([*self._messages, user_message])
         # 只保留该玩家自己的响应；格式校验失败后的纠错也属于其私有上下文。
         # 网络失败没有完整响应，不追加未配对的用户消息。
@@ -185,7 +207,7 @@ class ChatCompletionPlayer:
         # 复盘用独立提示词和完整赛后记录，不修改比赛对话，也不执行动作。
         return await self._complete([
             {"role": "system", "content": REVIEW_PROMPT},
-            {"role": "user", "content": json.dumps({**context, "correction": feedback}, ensure_ascii=False)},
+            {"role": "user", "content": json.dumps(named_data({**context, "correction": feedback}, self.names), ensure_ascii=False)},
         ])
 
     async def _complete(self, messages: list[dict]) -> str:
@@ -197,6 +219,8 @@ class ChatCompletionPlayer:
             "stream": False,
             self.spec.token_parameter: self.max_output_tokens,
         }
+        trace("request_config", model=self.spec.model, thinking_api=self.spec.thinking_api,
+              requested_thinking=self.spec.thinking_mode, max_output_tokens=self.max_output_tokens)
         trace("http_request", payload=payload)
         try:
             response = await self.client.post(
@@ -215,16 +239,40 @@ class ChatCompletionPlayer:
             raise PlayerError(f"模型服务返回 HTTP {response.status_code}", retryable=retryable)
         try:
             data = response.json()
-            trace("usage", usage=data.get("usage") if isinstance(data, dict) else None)
+            usage = data.get("usage") if isinstance(data, dict) else None
+            trace("usage", usage=usage)
             choice = data["choices"][0]
+            message = choice["message"]
+            if not isinstance(message, dict):
+                raise PlayerError("模型服务返回的响应结构无效")
+            self._record_reasoning(message, usage, choice.get("finish_reason"))
             if choice.get("finish_reason") != "stop":
                 raise PlayerError("模型输出未完整结束或未返回文本内容")
-            content = choice["message"]["content"]
+            content = message["content"]
             if not isinstance(content, str) or not content.strip():
                 raise PlayerError("模型返回空内容或非文本内容")
             return content
         except (ValueError, KeyError, IndexError, TypeError, AttributeError, RecursionError):
             raise PlayerError("模型服务返回的响应结构无效") from None
+
+    def _record_reasoning(self, message: dict, usage: object, finish_reason: object) -> None:
+        # 只保存服务实际提供的字段，不从 decision_summary 重构或推测思考文本。
+        fields = ("reasoning_content", "reasoning")
+        source = next((key for key in fields if isinstance(message.get(key), str) and message[key].strip()), None)
+        invalid = any(message.get(key) is not None and not isinstance(message[key], str) for key in fields)
+        tokens = None
+        if isinstance(usage, dict):
+            details = usage.get("completion_tokens_details")
+            candidate = details.get("reasoning_tokens") if isinstance(details, dict) else None
+            if candidate is None:
+                candidate = usage.get("reasoning_tokens")
+            if type(candidate) is int and candidate >= 0:
+                tokens = candidate
+        if self.spec.thinking_mode != "off" or source or invalid or (tokens is not None and tokens > 0):
+            trace("reasoning", requested_thinking=self.spec.thinking_mode,
+                  status="returned" if source else "invalid_field" if invalid else "not_returned",
+                  source=source, content=message[source] if source else None,
+                  reasoning_tokens=tokens, finish_reason=finish_reason)
 
 
 WAIT_RESPONSE = '{"decision_summary":"继续等待。","actions":[{"type":"WAIT"}]}'
@@ -260,7 +308,7 @@ class ScriptedPlayer:
         result = report["result"]
         last = report["games"][-1]
         return json.dumps({
-            "assessment": f"模拟复盘：本场完成 {result['games_played']} 局，比分 A {result['wins']['A']} : {result['wins']['B']} B，平局 {result['draws']} 局。",
+            "assessment": f"模拟复盘：本场完成 {result['games_played']} 局，比分 模拟玩家1 {result['wins']['A']} : {result['wins']['B']} 模拟玩家2，平局 {result['draws']} 局。",
             "key_moments": f"第 {last['game']} 局在第 {last['completed_ticks']} Tick 结束，原因是 {last['result']['reason']}；本场出拳规则为 {report['move_policy']}。",
             "improvements": "这些动作来自预设模拟脚本；可对照已公开的动作与说明，检查等待、改拳和结算时机。",
         }, ensure_ascii=False)

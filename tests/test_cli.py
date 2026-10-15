@@ -17,16 +17,16 @@ from model_rps.game import Event
 class CliTests(unittest.TestCase):
     def test_all_demo_scenarios_from_real_entry_point(self):
         expected = {
-            "change": "模拟玩家 B 获胜", "draw": "双方到期未出拳，平局",
-            "forfeit": "模拟玩家 B 到期未出拳，视为弃权", "deadline": "模拟玩家 A 获胜",
-            "retry": "模拟玩家 A 获胜", "settlement": "模拟玩家 A 获胜",
+            "change": "模拟玩家2 获胜", "draw": "双方到期未出拳，平局",
+            "forfeit": "模拟玩家2 到期未出拳，视为弃权", "deadline": "模拟玩家1 获胜",
+            "retry": "模拟玩家1 获胜", "settlement": "模拟玩家1 获胜",
         }
         env = dict(os.environ)
         env.pop("PYTHONIOENCODING", None)
         for scenario, result in expected.items():
             with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as directory:
                 process = subprocess.run(
-                    [sys.executable, "-m", "model_rps", "--mode", "demo", "--scenario", scenario,
+                    [sys.executable, "-m", "model_rps", "--no-config", "--mode", "demo", "--scenario", scenario,
                      "--max-games", "1", "--log-dir", directory, "--move-policy", "revisable"],
                     capture_output=True, text=True, encoding="utf-8", env=env, timeout=15,
                 )
@@ -60,7 +60,7 @@ class CliTests(unittest.TestCase):
             path.write_text('DEEPSEEK_API_KEY = ""\nOPENAI_API_KEY = ""\n', encoding="utf-8")
             output = io.StringIO()
             with patch("model_rps.cli.httpx.AsyncClient") as client, contextlib.redirect_stderr(output):
-                result = main(["--secrets-file", str(path)])
+                result = main(["--no-config", "--secrets-file", str(path)])
             self.assertEqual(result, 2)
             client.assert_not_called()
             self.assertIn("DEEPSEEK_API_KEY", output.getvalue())
@@ -92,7 +92,7 @@ class CliTests(unittest.TestCase):
     def test_live_configuration_error_does_not_crash(self):
         output = io.StringIO()
         with contextlib.redirect_stderr(output):
-            status = main(["--timeout", "nan"])
+            status = main(["--no-config", "--timeout", "nan"])
         self.assertEqual(status, 2)
         self.assertIn("请求超时", output.getvalue())
 
@@ -105,7 +105,7 @@ class CliTests(unittest.TestCase):
             ))
             output = io.StringIO()
             with patch("model_rps.cli.httpx.AsyncClient", return_value=client), contextlib.redirect_stdout(output):
-                status = main(["--secrets-file", str(path),
+                status = main(["--no-config", "--secrets-file", str(path),
                                "--log-dir", str(Path(directory) / "logs")])
             self.assertEqual(status, 1)
             self.assertIn("技术异常中止", output.getvalue())

@@ -16,6 +16,9 @@ htmlcov/
 
 # Local API keys and environment settings
 local_secrets.py
+config.toml
+config.local.toml
+secrets.toml
 .env
 .env.*
 !.env.example

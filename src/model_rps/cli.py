@@ -14,10 +14,13 @@ from pathlib import Path
 import httpx
 
 from .game import EndReason, Event, GameState, MAX_TICKS, MovePolicy
+from .config import CONFIG_PATH, RuntimeConfig, load_config, parser_defaults
 from .diagnostics import LogError
 from .logs import RunLogs
+from .identities import player_names
 from .match import MatchConfig, MatchStatus, run_match
-from .players import ChatCompletionPlayer, DEEPSEEK, OPENAI, demo_players
+from .players import (ChatCompletionPlayer, DEEPSEEK, OPENAI, DEEPSEEK_THINKING_MODES,
+                      OPENAI_THINKING_MODES, configure_thinking, demo_players)
 from .postmatch import MatchArchive, run_reviews
 from .runner import RequestPolicy
 
@@ -107,16 +110,23 @@ def load_keys(path: Path) -> tuple[str, str]:
     return keys["DEEPSEEK_API_KEY"], keys["OPENAI_API_KEY"]
 
 
-def make_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Model RPS：两个独立模型的猜拳博弈")
+def make_parser(config: dict | None = None) -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Model RPS：两个独立模型的猜拳博弈",
+                                     epilog="优先级：命令行 > TOML > 内置值。以下默认值指内置值；配置可覆盖。")
+    source = parser.add_mutually_exclusive_group()
+    source.add_argument("--config", type=Path, help="TOML 配置文件，默认读取工作目录的 config.toml")
+    source.add_argument("--no-config", action="store_true", help="忽略 TOML，使用内置默认值和命令行参数")
     parser.add_argument("--mode", choices=("demo", "live"), default="live",
                         help="live 真实模型（默认）；demo 模拟对局")
     parser.add_argument("--move-policy", choices=tuple(MovePolicy), default=MovePolicy.LOCKED.value,
                         help="locked 提交后锁定（默认）；revisable 允许改拳，下一 Tick 结算")
     parser.add_argument("--scenario", choices=("locked", "change", "settlement", "draw", "forfeit", "deadline", "retry"),
                         help="模拟场景，默认随出拳规则选择 locked 或 change")
-    parser.add_argument("--secrets-file", type=Path, default=Path("local_secrets.py"), help="本地密钥文件路径")
+    parser.add_argument("--secrets-file", type=Path, help="兼容旧版：用指定 Python 文件中的两个密钥覆盖 TOML 密钥")
     parser.add_argument("--timeout", type=float, default=RequestPolicy().timeout, help="每次请求的总超时秒数")
+    parser.add_argument("--retry-delay", type=float, default=1, help="真实模式重试间隔秒数，默认 1")
+    parser.add_argument("--max-output-tokens", type=int, default=20000, help="对局与复盘单次输出上限，默认 20000")
+    parser.add_argument("--initiative", choices=("simultaneous",), default="simultaneous", help="当前仅支持同时决策")
     parser.add_argument("--bo", type=int, default=1, help="正奇数；BO N 先赢 N//2+1 局，默认 BO1")
     parser.add_argument("--max-games", type=int, help="包含平局的实际总局数上限，默认 10×BO")
     parser.add_argument("--log-dir", type=Path, default=Path("logs"), help="日志根目录，默认 logs")
@@ -124,15 +134,31 @@ def make_parser() -> argparse.ArgumentParser:
     parser.add_argument("--openai-base-url", default=OPENAI.base_url)
     parser.add_argument("--deepseek-model", default=DEEPSEEK.model)
     parser.add_argument("--openai-model", default=OPENAI.model)
+    parser.add_argument("--openai-name", help="GPT 玩家显示名称，省略时使用模型标识")
+    parser.add_argument("--deepseek-name", help="DeepSeek 玩家显示名称，省略时使用模型标识")
+    parser.add_argument("--deepseek-thinking", choices=DEEPSEEK_THINKING_MODES, default="off",
+                        help="DeepSeek 思考档位，默认 off；启用可选 low/high/max")
+    parser.add_argument("--openai-thinking", choices=OPENAI_THINKING_MODES, default="off",
+                        help="GPT 思考档位，默认 off；启用可选 low/medium/high/xhigh/max")
+    parser.set_defaults(openai_api_key=None, deepseek_api_key=None)
+    if config:
+        parser.set_defaults(**parser_defaults(config))
     return parser
 
 
 async def play(args: argparse.Namespace) -> int:
-    policy = RequestPolicy(timeout=args.timeout,
-                           retry_delay=0 if args.mode == "demo" else RequestPolicy().retry_delay)
-    config = MatchConfig(args.bo, args.max_games, MovePolicy(args.move_policy))
+    # 显式选择旧密钥文件时，配置中的密钥不参与校验或回退。
+    if args.secrets_file is not None:
+        args = argparse.Namespace(**{**vars(args), "openai_api_key": None, "deepseek_api_key": None})
+    settings = RuntimeConfig.from_args(args)
+    policy = RequestPolicy(timeout=settings.timeout_seconds,
+                           retry_delay=0 if settings.mode == "demo" else settings.retry_delay_seconds)
+    config = MatchConfig(settings.best_of, settings.max_games, MovePolicy(settings.move_policy))
+    thinking = {"A": settings.gpt.thinking, "B": settings.deepseek.thinking}
+    if settings.mode == "demo" and any(mode != "off" for mode in thinking.values()):
+        raise ValueError("思考开关仅用于真实模型；demo 使用预设脚本，请保持双方思考为 off。")
     scenario = args.scenario or ("locked" if config.move_policy == MovePolicy.LOCKED else "change")
-    if args.mode == "demo" and scenario in ("change", "settlement") and config.move_policy == MovePolicy.LOCKED:
+    if settings.mode == "demo" and scenario in ("change", "settlement") and config.move_policy == MovePolicy.LOCKED:
         raise ValueError("change 和 settlement 场景需要 --move-policy revisable。")
 
     async def execute(factory, names, logs):
@@ -140,14 +166,18 @@ async def play(args: argparse.Namespace) -> int:
         players = factory()
         archive = MatchArchive()
         print(f"日志目录：{display_text(str(logs.path.resolve()))}", flush=True)
-        console.write(f"System：{'模拟' if args.mode == 'demo' else '真实模型'}比赛 BO{config.best_of}，"
+        console.write(f"System：{'模拟' if settings.mode == 'demo' else '真实模型'}比赛 BO{config.best_of}，"
                       f"先胜 {config.target_wins} 局；实际最多 {config.max_games} 局。")
+        console.write(f"System：参赛模型：{console.names['A']} vs {console.names['B']}。")
         console.write("System：出拳规则 locked：首次提交后锁定；双方提交齐全的当前 Tick 结束时结算。"
                       if config.move_policy == MovePolicy.LOCKED else
                       "System：出拳规则 revisable：允许改拳；双方提交齐全后的下一 Tick 结算。")
+        console.write(f"System：思考设置 {console.names['A']}={thinking['A']}，{console.names['B']}={thinking['B']}（对局与复盘均适用）。")
         logs.lifecycle("match_start", best_of=config.best_of, max_games=config.max_games,
-                       target_wins=config.target_wins, players=names, mode=args.mode,
-                       timeout=policy.timeout, retry_delay=policy.retry_delay, move_policy=config.move_policy)
+                       target_wins=config.target_wins, players=names, mode=settings.mode,
+                       timeout=policy.timeout, retry_delay=policy.retry_delay, move_policy=config.move_policy,
+                       thinking=thinking, initiative=settings.initiative,
+                       max_output_tokens=settings.max_output_tokens)
 
         def start(number):
             console.game, console.tick = number, 0
@@ -157,7 +187,7 @@ async def play(args: argparse.Namespace) -> int:
         def end(number, state, wins, draws):
             archive.finish_game(number, state)
             console.result(state)
-            console.write(f"System：比分 A {wins[0]} : {wins[1]} B；平局 {draws} 局。")
+            console.write(f"System：比分 {console.names['A']} {wins[0]} : {wins[1]} {console.names['B']}；平局 {draws} 局。")
             logs.lifecycle("game_end", game=number, reason=state.result.reason,
                            winner=state.result.winner, wins=wins, draws=draws,
                            completed_ticks=state.completed_ticks)
@@ -210,21 +240,30 @@ async def play(args: argparse.Namespace) -> int:
                 return 4
         return {MatchStatus.WON: 0, MatchStatus.UNDECIDED: 3, MatchStatus.TECHNICAL_ERROR: 1}[result.status]
 
-    if args.mode == "demo":
-        with RunLogs(args.log_dir) as logs:
+    if settings.mode == "demo":
+        names = player_names("模拟玩家1", "模拟玩家2")
+        with RunLogs(settings.log_dir, names=names) as logs:
             return await execute(lambda: demo_players(scenario),
-                                 {"A": "模拟玩家 A", "B": "模拟玩家 B"}, logs)
-    keys = load_keys(args.secrets_file)
-    deepseek = replace(DEEPSEEK, base_url=args.deepseek_base_url, model=args.deepseek_model)
-    openai = replace(OPENAI, base_url=args.openai_base_url, model=args.openai_model)
+                                 names, logs)
+    if settings.gpt.api_key is not None or settings.deepseek.api_key is not None:
+        if not settings.gpt.api_key or not settings.deepseek.api_key:
+            raise ValueError("TOML 配置必须同时填写两个模型的 api_key。")
+        keys = (settings.deepseek.api_key, settings.gpt.api_key)
+    else:
+        keys = load_keys(args.secrets_file or Path("local_secrets.py"))
+    deepseek = configure_thinking(replace(DEEPSEEK, base_url=settings.deepseek.base_url, model=settings.deepseek.model),
+                                 settings.deepseek.thinking)
+    openai = configure_thinking(replace(OPENAI, base_url=settings.gpt.base_url, model=settings.gpt.model),
+                               settings.gpt.thinking)
+    names = player_names(settings.gpt.display_name, settings.deepseek.display_name)
     async with httpx.AsyncClient(timeout=policy.timeout, follow_redirects=False) as client:
         def factory():
-            return (ChatCompletionPlayer(client, deepseek, keys[0]),
-                    ChatCompletionPlayer(client, openai, keys[1]))
+            return (ChatCompletionPlayer(client, openai, keys[1], names=names, max_output_tokens=settings.max_output_tokens),
+                    ChatCompletionPlayer(client, deepseek, keys[0], names=names, max_output_tokens=settings.max_output_tokens))
 
         factory()  # 写日志或发请求之前先校验模型配置。
-        with RunLogs(args.log_dir, secrets=keys) as logs:
-            return await execute(factory, {"A": deepseek.model, "B": openai.model}, logs)
+        with RunLogs(settings.log_dir, secrets=keys, names=names) as logs:
+            return await execute(factory, names, logs)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -233,8 +272,16 @@ def main(argv: list[str] | None = None) -> int:
         for stream in (sys.stdout, sys.stderr):
             if hasattr(stream, "reconfigure"):
                 stream.reconfigure(encoding="utf-8", errors="backslashreplace")
-    args = make_parser().parse_args(argv)
+    raw_argv = sys.argv[1:] if argv is None else list(argv)
     try:
+        probe = argparse.ArgumentParser(add_help=False)
+        source = probe.add_mutually_exclusive_group()
+        source.add_argument("--config", type=Path)
+        source.add_argument("--no-config", action="store_true")
+        config_args, _ = probe.parse_known_args(raw_argv)
+        config = {} if config_args.no_config or "--help" in raw_argv or "-h" in raw_argv else load_config(
+            config_args.config or CONFIG_PATH, required=config_args.config is not None)
+        args = make_parser(config).parse_args(raw_argv)
         return asyncio.run(play(args))
     except LogError as exc:
         print(f"日志错误：{exc}", file=sys.stderr)
