@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import math
 from collections import deque
 from dataclasses import dataclass, field, replace
 from typing import Protocol
@@ -14,6 +16,7 @@ from .game import MAX_TICKS, PlayerView
 from .diagnostics import trace
 from .identities import named_data
 from .prompts import REVIEW_PROMPT, SYSTEM_PROMPT, game_prompt
+from .streaming import CompletionStream, StreamError, sse_data
 
 MAX_OUTPUT_TOKENS = 20000
 DEEPSEEK_THINKING_MODES = ("off", "low", "high", "max")
@@ -92,7 +95,9 @@ def configure_thinking(spec: ModelSpec, mode: str) -> ModelSpec:
 
 class ChatCompletionPlayer:
     def __init__(self, client: httpx.AsyncClient, spec: ModelSpec, api_key: str, *,
-                 max_output_tokens: int = MAX_OUTPUT_TOKENS, names: dict[str, str] | None = None) -> None:
+                 max_output_tokens: int = MAX_OUTPUT_TOKENS, names: dict[str, str] | None = None,
+                 stream: bool = False, stream_first_timeout: float = 60,
+                 stream_idle_timeout: float = 30) -> None:
         if not isinstance(api_key, str) or not api_key.strip():
             raise ValueError("API key 未填写。")
         if any(ord(char) < 32 for char in api_key):
@@ -105,10 +110,18 @@ class ChatCompletionPlayer:
             raise ValueError("不支持的输出长度参数。")
         if type(max_output_tokens) is not int or max_output_tokens <= 0:
             raise ValueError("输出 token 上限必须是正整数。")
+        if type(stream) is not bool:
+            raise ValueError("stream 必须为布尔值。")
+        for limit in (stream_first_timeout, stream_idle_timeout):
+            if type(limit) not in (int, float) or not math.isfinite(limit) or limit <= 0:
+                raise ValueError("流式等待时限必须为正有限秒数。")
         self.client = client
         self.spec = spec
         self._api_key = api_key.strip()
         self.max_output_tokens = max_output_tokens
+        self.stream = stream
+        self.stream_first_timeout = stream_first_timeout
+        self.stream_idle_timeout = stream_idle_timeout
         self.names = dict(names) if names is not None else {"A": "A", "B": "B"}
         self.start_match()
 
@@ -146,12 +159,18 @@ class ChatCompletionPlayer:
             "model": self.spec.model,
             "messages": messages,
             "response_format": {"type": "json_object"},
-            "stream": False,
+            "stream": self.stream,
             self.spec.token_parameter: self.max_output_tokens,
         }
         trace("request_config", model=self.spec.model, thinking_api=self.spec.thinking_api,
-              requested_thinking=self.spec.thinking_mode, max_output_tokens=self.max_output_tokens)
+              requested_thinking=self.spec.thinking_mode, max_output_tokens=self.max_output_tokens,
+              stream=self.stream, stream_first_timeout=self.stream_first_timeout,
+              stream_idle_timeout=self.stream_idle_timeout)
+        if self.stream:
+            payload['stream_options'] = {'include_usage': True}
         trace("http_request", payload=payload)
+        if self.stream:
+            return self._parse_completion(await self._stream_complete(payload))
         try:
             response = await self.client.post(
                 self.spec.base_url.rstrip("/") + "/chat/completions",
@@ -169,6 +188,54 @@ class ChatCompletionPlayer:
             raise PlayerError(f"模型服务返回 HTTP {response.status_code}", retryable=retryable)
         try:
             data = response.json()
+        except (ValueError, RecursionError):
+            raise PlayerError("模型服务返回的响应结构无效") from None
+        return self._parse_completion(data)
+
+    async def _stream_complete(self, payload: dict) -> dict:
+        assembled = CompletionStream()
+        status = 'incomplete'
+        trace('stream_status', status='waiting')
+        try:
+            # 首包时限覆盖连接、响应头和第一个数据事件；心跳不能无限续命。
+            async with asyncio.timeout(self.stream_first_timeout) as deadline:
+                async with self.client.stream('POST', self.spec.base_url.rstrip('/') + '/chat/completions',
+                                              headers={'Authorization': f'Bearer {self._api_key}'},
+                                              json=payload, timeout=None) as response:
+                    trace('http_response', status=response.status_code, stream=True)
+                    if not response.is_success:
+                        await response.aread()
+                        trace('http_error_body', body=response.text)
+                        retryable = response.status_code in (408, 409, 429) or response.status_code >= 500
+                        raise PlayerError(f'模型服务返回 HTTP {response.status_code}', retryable=retryable)
+                    if response.headers.get('content-type', '').split(';')[0].strip().lower() != 'text/event-stream':
+                        raise StreamError('模型服务未返回 SSE 流式响应')
+                    async for data in sse_data(response):
+                        assembled.feed(data)
+                        if assembled.done:
+                            break
+                        deadline.reschedule(asyncio.get_running_loop().time() + self.stream_idle_timeout)
+                    result = assembled.result()
+            status = 'complete'
+            return result
+        except StreamError as exc:
+            raise PlayerError(str(exc)) from None
+        except TimeoutError:
+            which = '首包' if not assembled.chunks else '空闲'
+            raise PlayerError(f'流式{which}等待超时') from None
+        except httpx.TimeoutException:
+            raise TimeoutError from None
+        except httpx.RequestError:
+            raise PlayerError('模型流式连接中断') from None
+        except asyncio.CancelledError:
+            status = 'cancelled'
+            raise
+        finally:
+            trace('stream_end', status=status, chunks=assembled.chunks, message=assembled.message,
+                  usage=assembled.usage, finish_reason=assembled.finish_reason, done=assembled.done)
+
+    def _parse_completion(self, data: object) -> ModelResponse:
+        try:
             usage = data.get("usage") if isinstance(data, dict) else None
             trace("usage", usage=usage)
             choice = data["choices"][0]
@@ -202,7 +269,7 @@ class ChatCompletionPlayer:
             trace("reasoning", requested_thinking=self.spec.thinking_mode,
                   status="returned" if source else "invalid_field" if invalid else "not_returned",
                   source=source, content=message[source] if source else None,
-                  reasoning_tokens=tokens, finish_reason=finish_reason)
+                  reasoning_tokens=tokens, finish_reason=finish_reason, streamed=self.stream)
         return source is not None
 
 

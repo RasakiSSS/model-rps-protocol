@@ -130,6 +130,10 @@ def make_parser(config: dict | None = None) -> argparse.ArgumentParser:
                         help="模拟场景，默认随出拳规则选择 locked 或 change")
     parser.add_argument("--secrets-file", type=Path, help="兼容旧版：用指定 Python 文件中的两个密钥覆盖 TOML 密钥")
     parser.add_argument("--timeout", type=float, default=RequestPolicy().timeout, help="每次请求的总超时秒数")
+    parser.add_argument('--stream', action=argparse.BooleanOptionalAction, default=False,
+                        help='启用流式响应；--no-stream 使用非流式（默认），对局与复盘共用')
+    parser.add_argument('--stream-first-timeout', type=float, default=60, help='流式首包等待上限秒数，默认 60')
+    parser.add_argument('--stream-idle-timeout', type=float, default=30, help='流式数据事件之间的等待上限秒数，默认 30')
     parser.add_argument("--retry-delay", type=float, default=1, help="真实模式重试间隔秒数，默认 1")
     parser.add_argument("--max-output-tokens", type=int, default=20000, help="对局与复盘单次输出上限，默认 20000")
     parser.add_argument("--initiative", choices=("simultaneous", "alternating"), default="simultaneous",
@@ -186,7 +190,9 @@ async def play(args: argparse.Namespace) -> int:
                        target_wins=config.target_wins, players=names, mode=settings.mode,
                        timeout=policy.timeout, retry_delay=policy.retry_delay, move_policy=config.move_policy,
                        thinking=thinking, initiative=settings.initiative,
-                       max_output_tokens=settings.max_output_tokens)
+                       max_output_tokens=settings.max_output_tokens, stream=settings.stream,
+                       stream_first_timeout_seconds=settings.stream_first_timeout_seconds,
+                       stream_idle_timeout_seconds=settings.stream_idle_timeout_seconds)
 
         def start(number):
             console.game, console.tick = number, 0
@@ -207,6 +213,11 @@ async def play(args: argparse.Namespace) -> int:
         def request(number, record):
             logs.request(number, record)
             archive.request(number, record)
+            if record['kind'] == 'stream_status':
+                label = {'waiting': '等待响应', 'thinking': '接收思考', 'generating': '接收正文'}[record['status']]
+                phase = '复盘' if record.get('phase') == 'review' else f"第 {number} 局 Tick {record['tick']}"
+                # 只向终端报告阶段，不把片段、拳型或思考注入公开事件与模型上下文。
+                print(logs.redact(f"System：{console.names[record['player']]} · {phase} · 第 {record['attempt']} 次请求：{label}。"), flush=True)
 
         result = await run_match(lambda: players, config=config, policy=policy, on_start=start,
                                  on_event=lambda number, event: console.event(event),
@@ -237,7 +248,7 @@ async def play(args: argparse.Namespace) -> int:
             console.write("\nSystem：赛后复盘开始，双方各自分析完整记录。")
             logs.lifecycle("review_start")
             outcomes = await run_reviews(players, report, policy=policy,
-                                         on_request=lambda record: logs.request(0, record))
+                                         on_request=lambda record: request(0, record))
             for outcome in outcomes:
                 name = console.names[outcome.player]
                 if outcome.review is None:
@@ -273,8 +284,11 @@ async def play(args: argparse.Namespace) -> int:
     names = player_names(settings.gpt.display_name, settings.deepseek.display_name)
     async with httpx.AsyncClient(timeout=policy.timeout, follow_redirects=False) as client:
         def factory():
-            return (ChatCompletionPlayer(client, openai, keys[1], names=names, max_output_tokens=settings.max_output_tokens),
-                    ChatCompletionPlayer(client, deepseek, keys[0], names=names, max_output_tokens=settings.max_output_tokens))
+            options = dict(names=names, max_output_tokens=settings.max_output_tokens, stream=settings.stream,
+                           stream_first_timeout=settings.stream_first_timeout_seconds,
+                           stream_idle_timeout=settings.stream_idle_timeout_seconds)
+            return (ChatCompletionPlayer(client, openai, keys[1], **options),
+                    ChatCompletionPlayer(client, deepseek, keys[0], **options))
 
         factory()  # 写日志或发请求之前先校验模型配置。
         with RunLogs(settings.log_dir, secrets=keys, names=names) as logs:

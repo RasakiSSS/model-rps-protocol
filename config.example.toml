@@ -7,6 +7,9 @@ log_dir = "logs"                     # 相对于本配置文件；CLI --log-dir 
 timeout_seconds = 120
 retry_delay_seconds = 1
 max_output_tokens = 20000            # 对局与复盘共用，包含思考生成额度
+stream = false                      # true 启用流式；收到完整响应后才执行动作
+stream_first_timeout_seconds = 60    # 首个数据事件等待上限，含连接时间
+stream_idle_timeout_seconds = 30     # 后续数据事件间的等待上限；timeout_seconds 仍限制总时长
 
 [match]
 move_policy = "locked"               # locked / revisable

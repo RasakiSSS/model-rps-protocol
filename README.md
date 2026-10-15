@@ -4,7 +4,7 @@
 
 模型负责交流与决策，Python 裁判负责规则、信息隔离和胜负判定。项目用于观察模型在不同规则和提示词下的博弈行为，不预设模型必须聊天，也不把单场胜负当作模型能力排名。
 
-当前代码版本为 **0.2.0**，支持 GPT 与 DeepSeek 参数方案的 Chat Completions 兼容接口。默认同时行动、首次出拳锁定，另有允许改拳的对照模式和实验性轮流行动模式。当前使用非流式请求。
+当前代码版本为 **0.2.0**，支持 GPT 与 DeepSeek 参数方案的 Chat Completions 兼容接口。默认同时行动、首次出拳锁定，另有允许改拳的对照模式和实验性轮流行动模式。支持可选流式响应，默认仍为非流式。
 
 ## 功能
 
@@ -96,6 +96,8 @@ macOS / Linux 使用 `cp config.example.toml config.toml`。也可以在文件�
 | `[app]` | `mode`、`log_dir` | live / demo，以及日志根目录 |
 | `[app]` | `timeout_seconds`、`retry_delay_seconds` | 每次请求总时限、重试间隔 |
 | `[app]` | `max_output_tokens` | 对局和复盘共用的单次输出上限 |
+| `[app]` | `stream` | 是否启用流式响应，默认 `false` |
+| `[app]` | `stream_first_timeout_seconds`、`stream_idle_timeout_seconds` | 首个流式数据事件等待上限、后续数据事件间的等待上限 |
 | `[match]` | `best_of`、`max_games` | BO 正奇数、包含平局的实际总局数上限 |
 | `[match]` | `move_policy` | locked 锁定出拳 / revisable 允许改拳 |
 | `[match]` | `initiative` | simultaneous 同时行动 / alternating 轮流行动 |
@@ -122,6 +124,28 @@ macOS / Linux 使用 `cp config.example.toml config.toml`。也可以在文件�
 `--config` 与 `--no-config` 互斥。显式指定的配置不存在、TOML 格式错误或包含非法参数时，程序会在请求前报错。运行模拟比赛建议使用 `--no-config --mode demo`，以免读入真实配置中的思考设置；模拟模式要求双方思考为 `off`。
 
 未显式指定配置且当前目录没有 `config.toml` 时，程序使用内置默认值，不会生成文件。真实模式在没有 TOML 密钥时仍有旧版密钥文件回退逻辑；新用户若遇到 `local_secrets.py` 缺失提示，应按快速开始创建并填写 `config.toml`。
+
+## 流式响应
+
+在 `config.toml` 的 `[app]` 中设置 `stream = true`，或通过命令行临时启用：
+
+```powershell
+.\.venv\Scripts\python.exe -m model_rps --config config.toml --stream --bo 3
+```
+
+`--no-stream` 可临时恢复非流式。开关对双方的对局和复盘都生效，兼容同时行动、轮流行动及允许改拳模式；模拟玩家仍使用固定脚本，不产生流式网络请求。
+
+流式接收期间，终端只展示等待、接收思考或接收正文的状态。接口思考逐步写入各自的 `thought.log`，正文片段只写入私有 `debug.log`。收到正常结束标记并组装完整 JSON 后，才进行动作或复盘校验；即使某个中间片段看起来已经能解析，也不会提前发言、出拳或公开分析。
+
+| 时限 | TOML 字段 | CLI 参数 | 默认值 |
+| --- | --- | --- | --- |
+| 首个数据事件（包含连接时间） | `stream_first_timeout_seconds` | `--stream-first-timeout` | 60 秒 |
+| 后续数据事件间隔 | `stream_idle_timeout_seconds` | `--stream-idle-timeout` | 30 秒 |
+| 整次请求，包括持续输出 | `timeout_seconds` | `--timeout` | 内置 60 秒，模板 120 秒 |
+
+以上字段均放在 `[app]`；总时限始终有效，实际以最先达到的时限为准。仅有注释心跳不会重置数据事件等待时间。思考较长时，可根据服务表现调整这些时限。
+
+断流、缺失结束标记、截断或非法事件会使本次响应无效，沿用最多三次的重试额度。失败片段保留在私有日志，不进入后续模型历史，也不会与下一次请求拼接。服务不支持流式或相关参数时会报错，不自动改为非流式。
 
 ## 比赛规则
 
@@ -205,6 +229,8 @@ logs/日期时间_唯一编号/
 | `thought.log` | 按局号、Tick 和尝试次数分段的中文阅读版：接口思考、正文分析、动作、复盘及失败状态 |
 | `debug.log` | JSON Lines 格式的输入、响应、结构化事件、用量、耗时、错误与重试记录 |
 
+流式模式增加 `stream_delta`（文本片段）和 `stream_end`（完整或未完成的接收记录）。`thought.log` 连续保留思考的段落，结束后记录状态与用量，不重复打印整段思考。跨分片的已知密钥前缀会暂缓写入以完成脱敏；请求结束时仍不完整的前缀会被遮盖。用量缺失记为 `null`，不视为零。
+
 “通过校验”不等于“已执行”。同时行动时，若对手在该 Tick 失败，双方暂存动作都不执行；轮流行动时保留此前已完成的行动。以公开裁判记录判断实际结果。锁定后被忽略的 MOVE 在私有记录与赛后报告中单独标记为 `ignored_actions`。
 
 日志使用 UTF-8，逐条写入；写入失败会中止比赛。不记录鉴权头，并过滤本次配置的两把 API key。私有日志仍包含模型输入、输出和分析，分享前应检查内容。默认 `logs/` 已被 Git 忽略；自定义目录需自行配置忽略规则。
@@ -240,6 +266,7 @@ model-rps-protocol/
 │  ├─ game.py                    状态、动作与裁判规则
 │  ├─ runner.py / match.py       行动调度、重试与 BO 比赛
 │  ├─ players.py                 模型适配器与模拟玩家
+│  ├─ streaming.py               SSE 事件解码与完整响应组装
 │  ├─ prompts.py                 对局与复盘提示词
 │  ├─ postmatch.py               赛后公开与复盘
 │  ├─ logs.py / diagnostics.py   日志与诊断
@@ -255,7 +282,7 @@ model-rps-protocol/
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
-测试使用标准库 `unittest` 和 HTTPX 模拟传输，不调用真实模型。覆盖裁判规则、同时与轮流行动、上下文隔离、配置、请求重试、日志、思考字段和赛后复盘。
+测试使用标准库 `unittest` 和 HTTPX 模拟传输，不调用真实模型。覆盖裁判规则、同时与轮流行动、上下文隔离、配置、请求重试、日志、思考字段和赛后复盘，以及流式分片、断流、超时、取消和跨分片脱敏。
 
 更多离线场景可以通过 `--scenario` 选择，例如：
 

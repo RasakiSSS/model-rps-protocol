@@ -1,8 +1,8 @@
 # Model RPS — 项目协议 v0.2
 
-项目阶段：支持默认同时行动与实验性轮流行动、锁定出拳与可选改拳模式、BO 比赛、同场上下文保留、日志、赛后公开复盘、双方独立思考设置与 TOML 配置。113 项自动化测试通过。
+项目阶段：支持默认同时行动与实验性轮流行动、锁定出拳与可选改拳模式、BO 比赛、同场上下文保留、日志、赛后公开复盘、双方独立思考设置、TOML 配置与可选流式响应。
 
-最后更新：2026-10-15。
+最后更新：2026-10-16。
 
 ## 1. 项目目标与本版范围
 
@@ -257,7 +257,7 @@ model-rps-protocol/
 
 ### 11.3 接口参数
 
-使用兼容 Chat Completions 的非流式接口，并请求 `json_object` 输出。双方思考档位按第 16 节独立设置，内置 off、模板 high。两个模型单次请求输出上限共用 `app.max_output_tokens`，内置值和模板值均为 **20,000 token**，可由 `--max-output-tokens` 覆盖。思考生成也会占用额度，并非仅限制最终 JSON。截断、拒绝或空内容作为失败响应处理，纳入统一重试额度。
+使用兼容 Chat Completions 的接口，并请求 `json_object` 输出。默认非流式；可选 SSE 流式响应见第 18 节。双方思考档位按第 16 节独立设置，内置 off、模板 high。两个模型单次请求输出上限共用 `app.max_output_tokens`，内置值和模板值均为 **20,000 token**，可由 `--max-output-tokens` 覆盖。思考生成也会占用额度，并非仅限制最终 JSON。截断、拒绝或空内容作为失败响应处理，纳入统一重试额度。
 
 运行参数通过第 17 节的 TOML 与 CLI 合并；未配置的字段使用内置值。以本地严格校验保障响应合法性，服务端 JSON 模式不替代裁判校验。缺少正文分析且没有接口思考文本时，整份响应无效，反馈要求补充策略分析，消耗原有重试额度。显式填写空白或非字符串的分析也会被拒绝。适配器用本次响应的独立标记传递思考可用性，不把思考文本复制到正文；开启思考、思考 token 数及前一次响应均不能代替当前响应的文本。比赛期间正文分析仅保留在自己的历史中，赛后按第 15 节公开。
 
@@ -395,7 +395,7 @@ DeepSeek 开启时发送 `thinking.type="enabled"` 和对应的 `reasoning_effor
 
 | 节 | 允许字段 |
 | --- | --- |
-| `[app]` | mode、log_dir、timeout_seconds、retry_delay_seconds、max_output_tokens |
+| `[app]` | mode、log_dir、timeout_seconds、retry_delay_seconds、max_output_tokens、stream、stream_first_timeout_seconds、stream_idle_timeout_seconds |
 | `[match]` | move_policy、best_of、max_games、initiative |
 | `[players.gpt]` | name（可选）、model、base_url、api_key、thinking |
 | `[players.deepseek]` | name（可选）、model、base_url、api_key、thinking |
@@ -409,3 +409,17 @@ DeepSeek 开启时发送 `thinking.type="enabled"` 和对应的 `reasoning_effor
 校验在请求前完成：严格检查未知节与字段、字符串、数值类型与范围、正奇数 BO、胜局与总局数关系、思考档位及 HTTP(S) 地址。地址不得夹带鉴权信息、查询参数或片段。显示名不允许使用裁判内部保留的 A/B。请求参数的远程兼容性仍由所选服务决定；不会自动降级思考、切换模型或改写输出上限。
 
 自动化测试以模拟 HTTP 覆盖文件加载、跳过配置、CLI 优先级、非法配置、路径解析、密钥来源与脱敏，以及从真实模式入口经过 BO、跨局记忆、双方复盘到日志的完整链路。本次配置改动未额外调用真实服务。
+
+## 18. 可选流式响应
+
+`app.stream` 为布尔值，默认 false；CLI `--stream` / `--no-stream` 覆盖配置。双方对局和复盘共用开关，模拟玩家不发起流式请求。非流式路径保留，服务拒绝流式参数时不自动回退。流式请求发送 `stream=true` 与 `stream_options.include_usage=true`，按 [Chat Completions 流式事件](https://developers.openai.com/api/reference/resources/chat/subresources/completions/streaming-events) 读取 SSE。
+
+接收器按事件边界解析 data，支持传输分片、UTF-8 跨字节分片、CRLF、多行 data、注释心跳、空 role 片段及 choices 为空的用量尾包。只接受 index=0 的单条文本响应；合并 content、reasoning_content 和 reasoning。思考字段不进入后续对话。缺失 usage 保留 null，不根据片段数量推算 token。
+
+必须取得 finish_reason=stop 和 `[DONE]`，再对完整正文执行现有 JSON、动作或复盘校验。中间内容永不执行；长度截断、拒绝、非法事件、EOF 或连接中断都使当前请求失败。重试使用原快照与原额度，成功的对手不重复请求；失败流的正文与思考片段不回填模型历史，各次尝试独立组装。取消会关闭响应连接；日志故障直接停止，不重试。
+
+首个有效 SSE 数据事件的等待由 `stream_first_timeout_seconds` 限制，默认 60 秒并包含连接和响应头；后续事件间的等待由 `stream_idle_timeout_seconds` 限制，默认 30 秒。CLI 对应 `--stream-first-timeout`、`--stream-idle-timeout`。注释心跳不重置等待时限。原有 timeout_seconds 始终限制整次请求，即使持续收到事件也不能无限延长。
+
+终端只报告等待、思考接收和正文接收阶段，不公开片段或影响模型可见状态。接口思考逐步写入私有 thought.log，正文与思考分片以 stream_delta 写入对应 debug.log；stream_end 记录完成、未完成或取消、组装内容、结束原因及可用用量。接收完整不代表通过校验。原 reasoning 结构化记录继续保留，阅读版以状态和用量结束，不重复正文。已知密钥跨分片匹配后脱敏，未完成的密钥前缀暂缓写入，结束时遮盖。
+
+2026-10-16 使用本地配置的 GPT-5.6 Sol 兼容服务与 DeepSeek Flash 官方服务各做一次流式对局请求验证，临时输出上限 20,000 token；两者均正常结束、返回接口思考及有效动作 JSON。此验证确认该次请求的接口兼容性，BO 与复盘的流式链路另由模拟 HTTP 测试覆盖。

@@ -17,6 +17,11 @@ class RunLogs:
         self._secrets = tuple(sorted({value.strip() for value in secrets if value.strip()}, key=len, reverse=True))
         self.path = root / (datetime.now().strftime("%Y%m%d_%H%M%S_%f") + "_" + uuid4().hex[:8])
         self._files = {}
+        self._stream_tails = {}
+        self._stream_layout = {}
+        self._secret_forms = tuple(sorted({form for secret in self._secrets for form in
+                                          (secret, json.dumps(secret)[1:-1],
+                                           json.dumps(secret, ensure_ascii=False)[1:-1])}, key=len, reverse=True))
         self.names = dict(names) if names is not None else None
         try:
             self.path.mkdir(parents=True, exist_ok=False)
@@ -41,9 +46,12 @@ class RunLogs:
         return text
 
     def _write(self, key, line: str) -> None:
+        self._fragment(key, line + '\n')
+
+    def _fragment(self, key, text: str) -> None:
         try:
             stream = self._files[key]
-            stream.write(line + "\n")
+            stream.write(text)
             stream.flush()
         except (OSError, UnicodeError):
             raise LogError("日志写入失败，比赛已停止。") from None
@@ -98,7 +106,9 @@ class RunLogs:
             lines.append(f"状态：{inline(status)}  |  思考等级：{inline(record.get('requested_thinking', '未提供'))}")
             lines.append(f"思考 token：{tokens if tokens is not None else '未提供'}  |  结束原因：{inline(record.get('finish_reason') or '未提供')}")
             lines.append("可见性：仅私有日志；不进入后续请求或赛后公开记录。")
-            if record.get("content"):
+            if record.get('streamed') and record.get('content'):
+                lines.append('思考内容：见上方逐步写入的流式记录。')
+            elif record.get("content"):
                 lines.append(paragraph("思考内容：", record["content"]))
             lines.append("注：收到思考文本不代表最终动作或复盘通过校验。")
         elif kind == "decision":
@@ -139,11 +149,88 @@ class RunLogs:
     def request(self, game: int, record: dict) -> None:
         player = record["player"]
         entry = {"game": game, **record}
+        if record['kind'] == 'stream_delta':
+            self._stream_delta(entry)
+            return
+        if record['kind'] in ('stream_end', 'request_end'):
+            self._finish_stream(entry)
         self._json((player, "debug"), entry)
+        if record['kind'] == 'stream_end':
+            status = '接收完整；仍须通过 JSON 与动作/复盘校验。' if record['status'] == 'complete' else '接收未完成；本次片段不作为有效动作或复盘。'
+            self._write((player, 'thought'), f'流式接收结束：{status}\n')
         if record["kind"] in ("reasoning", "decision", "review") or (
             record["kind"] == "request_end" and record["status"] != "valid"
         ):
             self._thought(player, entry)
+
+    @staticmethod
+    def _stream_key(entry):
+        return (entry['game'], entry['player'], entry.get('phase', 'game'), entry['tick'], entry['attempt'])
+
+    def _stream_delta(self, entry):
+        key = (*self._stream_key(entry), entry['field'])
+        text = self._stream_tails.pop(key, '') + entry['content']
+        # 从左到右消耗完整密钥，保留可能跨分片的密钥前缀，不能逐片直接 redact。
+        safe, index = [], 0
+        while index < len(text):
+            match = next((secret for secret in self._secret_forms if text.startswith(secret, index)), None)
+            if match:
+                safe.append('[REDACTED]')
+                index += len(match)
+            elif any(secret.startswith(text[index:]) for secret in self._secret_forms
+                     if len(secret) > len(text) - index):
+                break
+            else:
+                safe.append(text[index])
+                index += 1
+        if index < len(text):
+            self._stream_tails[key] = text[index:]
+        self._write_delta({**entry, 'content': ''.join(safe)})
+
+    def _write_delta(self, entry):
+        self._json((entry['player'], 'debug'), entry)
+        if entry['field'] == 'content' or not entry['content']:
+            return
+        player = entry['player']
+        layout = self._stream_layout.get(player)
+        identity = (*self._stream_key(entry), entry['field'])
+        if layout is None or layout['identity'] != identity:
+            if layout is not None:
+                self._fragment((player, 'thought'), '\n')
+            phase = '赛后复盘' if entry.get('phase') == 'review' else f"第 {entry['game']} 局 · Tick {entry['tick']}"
+            timestamp = datetime.now().astimezone().isoformat(timespec='seconds')
+            name = self.redact(self.names[player] if self.names else player)
+            name = ''.join(f'\\u{ord(c):04x}' if unicodedata.category(c).startswith('C') else c for c in name)
+            self._write((player, 'thought'), '═' * 60 + '\n' +
+                        f"{phase} · 第 {entry['attempt']} 次请求 · 流式接口思考（{entry['field']}）\n模型：{name}  |  时间：{timestamp}\n"
+                        '仅私有日志；接收中，尚未校验。\n思考内容：')
+            layout = {'identity': identity, 'line_start': True, 'cr': False}
+            self._stream_layout[player] = layout
+        output = []
+        for char in entry['content']:
+            if char == '\n' and layout['cr']:
+                layout['cr'] = False
+                continue
+            layout['cr'] = char == '\r'
+            if char == '\r':
+                char = '\n'
+            if layout['line_start']:
+                output.append('    ')
+            output.append(char if char == '\n' or not unicodedata.category(char).startswith('C')
+                          else '    ' if char == '\t' else f'\\u{ord(char):04x}')
+            layout['line_start'] = char == '\n'
+        self._fragment((player, 'thought'), ''.join(output))
+
+    def _finish_stream(self, entry):
+        prefix = self._stream_key(entry)
+        for key in list(self._stream_tails):
+            if key[:-1] == prefix:
+                self._stream_tails.pop(key)
+                self._write_delta({**entry, 'kind': 'stream_delta', 'field': key[-1],
+                                   'content': '[REDACTED_PREFIX]', 'buffer_flush': True})
+        if entry['player'] in self._stream_layout:
+            self._fragment((entry['player'], 'thought'), '\n\n')
+            self._stream_layout.pop(entry['player'])
 
     def lifecycle(self, kind: str, **data) -> None:
         for player in ("A", "B"):

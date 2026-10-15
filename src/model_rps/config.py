@@ -14,7 +14,8 @@ from .players import DEEPSEEK_THINKING_MODES, OPENAI_THINKING_MODES
 
 CONFIG_PATH = Path("config.toml")
 _SECTIONS = {"app", "match", "players"}
-_APP = {"mode", "log_dir", "timeout_seconds", "retry_delay_seconds", "max_output_tokens"}
+_APP = {"mode", "log_dir", "timeout_seconds", "retry_delay_seconds", "max_output_tokens",
+        "stream", "stream_first_timeout_seconds", "stream_idle_timeout_seconds"}
 _MATCH = {"move_policy", "best_of", "max_games", "initiative"}
 _PLAYER = {"name", "model", "base_url", "api_key", "thinking"}
 
@@ -80,6 +81,9 @@ class RuntimeConfig:
     initiative: str
     gpt: PlayerConfig
     deepseek: PlayerConfig
+    stream: bool = False
+    stream_first_timeout_seconds: float = 60
+    stream_idle_timeout_seconds: float = 30
 
     @classmethod
     def from_args(cls, args) -> RuntimeConfig:
@@ -91,6 +95,10 @@ class RuntimeConfig:
         number_value(args.timeout, "请求超时")
         number_value(args.retry_delay, "retry_delay_seconds", zero=True)
         number_value(args.max_output_tokens, "max_output_tokens", integer=True)
+        if type(args.stream) is not bool:
+            raise ValueError("stream 必须为布尔值。")
+        number_value(args.stream_first_timeout, "stream_first_timeout_seconds")
+        number_value(args.stream_idle_timeout, "stream_idle_timeout_seconds")
         number_value(args.bo, "best_of", integer=True)
         if args.bo % 2 != 1:
             raise ValueError("best_of 必须为正奇数。")
@@ -115,7 +123,8 @@ class RuntimeConfig:
                 text_value(key, f"{prefix}.api_key", empty=args.mode == "demo")
             players.append(PlayerConfig(model, url, thinking, name, key))
         return cls(args.mode, args.timeout, args.retry_delay, args.max_output_tokens, Path(args.log_dir),
-                   args.bo, args.max_games, args.move_policy, args.initiative, *players)
+                   args.bo, args.max_games, args.move_policy, args.initiative, *players,
+                   args.stream, args.stream_first_timeout, args.stream_idle_timeout)
 
 
 def _table(data: dict, name: str) -> dict:
@@ -164,7 +173,10 @@ def load_config(path: Path = CONFIG_PATH, *, required: bool = False) -> dict:
             choice_value(player["thinking"], OPENAI_THINKING_MODES if name == "gpt" else DEEPSEEK_THINKING_MODES,
                          f"players.{name}.thinking")
     for key, value in app.items():
-        if key in ("mode", "log_dir"):
+        if key == 'stream':
+            if type(value) is not bool:
+                raise ValueError("app.stream 必须为布尔值。")
+        elif key in ("mode", "log_dir"):
             text_value(value, f"app.{key}")
         else:
             number_value(value, f"app.{key}", integer=key == "max_output_tokens", zero=key == "retry_delay_seconds")
@@ -183,6 +195,9 @@ def load_config(path: Path = CONFIG_PATH, *, required: bool = False) -> dict:
         raise ValueError("match.best_of 必须为正奇数。")
     result = {}
     result.update({"mode": app.get("mode"), "timeout": app.get("timeout_seconds"),
+                   "stream": app.get("stream"),
+                   "stream_first_timeout": app.get("stream_first_timeout_seconds"),
+                   "stream_idle_timeout": app.get("stream_idle_timeout_seconds"),
                    "retry_delay": app.get("retry_delay_seconds"),
                    "max_output_tokens": app.get("max_output_tokens"),
                    "log_dir": app.get("log_dir")})
@@ -202,7 +217,9 @@ def parser_defaults(config: dict) -> dict:
     defaults = {}
     mapping = {"mode": "mode", "timeout": "timeout", "bo": "bo", "max_games": "max_games",
                "move_policy": "move_policy", "log_dir": "log_dir", "retry_delay": "retry_delay",
-               "max_output_tokens": "max_output_tokens", "initiative": "initiative"}
+               "max_output_tokens": "max_output_tokens", "initiative": "initiative",
+               "stream": "stream", "stream_first_timeout": "stream_first_timeout",
+               "stream_idle_timeout": "stream_idle_timeout"}
     for source, target in mapping.items():
         if source in config:
             defaults[target] = config[source]
