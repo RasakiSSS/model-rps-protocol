@@ -1,336 +1,270 @@
 # Model RPS
 
-使用 Python 和 CLI（命令行界面），让两个独立的大语言模型通过交流和自主出拳完成一局猜拳博弈。
+让两个大语言模型在命令行中聊天、等待、出拳，并在比赛结束后复盘自己的策略。
 
-当前版本 v0.2 提供 DeepSeek 和 GPT 兼容接口适配、TOML 配置、BO 比赛、运行日志和赛后复盘。模型负责策略、交流与复盘，Python 程序负责规则、状态、信息可见性和比赛判定。
+模型负责交流与决策，Python 裁判负责规则、信息隔离和胜负判定。项目用于观察模型在不同规则和提示词下的博弈行为，不预设模型必须聊天，也不把单场胜负当作模型能力排名。
 
-详细规则见 [项目协议 v0.2](model-rps-protocol-v0.2.md)。
+当前代码版本为 **0.2.0**，支持 GPT 与 DeepSeek 参数方案的 Chat Completions 兼容接口。默认同时行动、首次出拳锁定，另有允许改拳的对照模式和实验性轮流行动模式。当前使用非流式请求，流式输出计划在后续版本加入。
 
-## 当前进度
+## 功能
 
-裁判规则、Tick 并发调度、响应校验与重试、模拟玩家、模型适配器和 CLI 均已实现。支持五份运行日志、BO 赛制、同场上下文保留、赛后公开复盘和双方独立的思考设置。默认同时行动、首次提交后锁定出拳；新增实验性 alternating 轮流行动模式，原来的允许改拳模式仍可用于同时行动。本地 113 项自动化测试已通过。
+- **自主行动**：每次必须选择出拳 `MOVE` 或等待 `WAIT`，可以同时公开发言 `SAY`。
+- **BO 比赛**：支持任意正奇数 BO，先达到目标胜局数即结束；平局继续，设有实际总局数上限。
+- **独立上下文**：同一场 BO 内保留各自历史，新比赛清空；结算前隐藏拳型。
+- **TOML 配置**：设置双方密钥、服务地址、模型、显示名、思考级别与比赛参数。
+- **日志与复盘**：记录聊天、分析和调试信息；赛后公开正文分析，双方独立复盘。
+- **离线演示**：提供预设模拟玩家，无需 API key。
 
-两种服务均已验证接受 20,000 token 输出上限。模型决策说明与复盘可能包含事实或判断错误，实际动作与结果以裁判记录为准。输出上限和双方思考级别现在可在配置文件中调整。
+完整规则与数据约定见 [项目协议 v0.2](model-rps-protocol-v0.2.md)。
 
-2026-10-15 已完成锁定模式真实验证：双方第 1 Tick 提交，GPT 的布胜 DeepSeek 的石头，当 Tick 结算，无额外结算请求；随后双方复盘成功。该场仍快速提交，不能据此推断锁定模式会增加交流或等待。
+## 快速开始
 
-## 安装与首次运行
+需要 **Python 3.12 或更高版本**。使用克隆命令还需要安装 Git；也可以从 GitHub 的 **Code → Download ZIP** 下载并解压，然后在项目根目录打开终端。
 
-在项目根目录打开 PowerShell，使用现有 `.venv`（Python 3.12.6）。首次配置时复制 `config.example.toml` 为 `config.toml`，填写双方 `api_key`。当前工作区已从原密钥文件迁入本地配置，无需再次复制或填写。
+### 1. 下载并安装
+
+Windows PowerShell：
 
 ```powershell
+git clone https://github.com/RasakiSSS/model-rps-protocol.git
+cd model-rps-protocol
+py -3.12 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -e .
-.\.venv\Scripts\python.exe -m model_rps
 ```
 
-当前工作区已完成安装。`-e .` 表示以可编辑方式安装，修改源文件后无需重复安装；依赖声明变化时再执行安装命令。
+如果安装的是其他受支持的 Python 版本，将 `py -3.12` 换成对应版本，例如 `py -3.13`。已有 `.venv` 时可跳过创建步骤。以下命令直接使用虚拟环境里的 Python，无需激活环境。
 
-当前本地配置启动真实模型 BO9，使用 `gpt-5.6-sol` 与官方 `deepseek-flash`，双方思考 `high`、请求时限 120 秒、单次输出上限 20,000 token、锁定出拳规则。每次运行创建独立日志目录。无 API 请求的演示使用 `--no-config --mode demo`。
+macOS / Linux（先用 `python3 --version` 确认版本至少为 3.12）：
 
-## TOML 配置
+```bash
+git clone https://github.com/RasakiSSS/model-rps-protocol.git
+cd model-rps-protocol
+python3 -m venv .venv
+./.venv/bin/python -m pip install -e .
+```
 
-程序自动读取**当前工作目录**的 `config.toml`。模板见 [config.example.toml](config.example.toml)，实际配置被 Git 忽略，模板不含密钥。配置用 UTF-8 保存，可以写注释，也可以只保留需要覆盖的字段。
+后续示例使用 PowerShell；macOS / Linux 将 `.\.venv\Scripts\python.exe` 替换成 `./.venv/bin/python`。
 
-优先级为：**命令行参数 > TOML > 内置默认值**。内置值保持兼容：真实模式、BO1、locked、双方思考 off、60 秒超时、1 秒重试间隔和 20,000 token；模板采用上述当前实验设置。
-
-| 配置节 | 字段 | 含义 |
-| --- | --- | --- |
-| `[app]` | `mode`、`log_dir` | live/demo 与日志根目录 |
-| `[app]` | `timeout_seconds`、`retry_delay_seconds`、`max_output_tokens` | 单次时限、重试间隔、对局与复盘共用输出上限 |
-| `[match]` | `move_policy`、`best_of`、`max_games` | 出拳规则、BO 正奇数、含平局的总局数上限 |
-| `[match]` | `initiative` | `simultaneous` 同时行动；`alternating` 实验性轮流行动，仅支持 locked |
-| `[players.gpt]`、`[players.deepseek]` | `model`、`base_url`、`api_key`、`thinking` | 各自的模型、服务、密钥和思考级别 |
-| 同上 | `name`（可选） | 玩家显示名；省略时随模型标识变化 |
-
-省略 `max_games` 时按**最终生效的 BO × 10** 计算；例如模板 BO9 用 `--bo 3` 覆盖后，上限为 30 局。若显式填写了 `max_games`，它保持填写值，并且不得低于目标胜局数。
+### 2. 先运行模拟比赛
 
 ```powershell
-# 临时覆盖 BO 和输出上限，不改配置文件
-.\.venv\Scripts\python.exe -m model_rps --bo 3 --max-output-tokens 24000
+.\.venv\Scripts\python.exe -m model_rps --no-config --mode demo --bo 3
+```
 
-# 使用另一份本地配置
+这会运行无需密钥、不会调用模型的 BO3，展示聊天、出拳、比分和预设复盘，并打印本次日志目录。模拟玩家使用固定脚本，不能代表真实模型表现。
+
+### 3. 配置真实模型
+
+首次创建配置文件：
+
+```powershell
+Copy-Item config.example.toml config.toml
+```
+
+macOS / Linux 使用 `cp config.example.toml config.toml`。**已有 `config.toml` 时直接编辑，避免覆盖自己的配置。**
+
+用文本编辑器打开 `config.toml`，分别检查 `[players.gpt]` 和 `[players.deepseek]`：
+
+| 字段 | 填写内容 |
+| --- | --- |
+| `api_key` | 对应服务提供的密钥，两方都需填写 |
+| `base_url` | API 基础地址，不包含末尾的 `/chat/completions` |
+| `model` | 该服务实际支持的模型标识 |
+| `thinking` | 当前适配器允许、且模型服务支持的思考级别 |
+| `name` | 可选显示名，省略时使用模型标识 |
+
+模板中的 GPT 地址是第三方兼容服务，DeepSeek 地址是官方服务；它们是实验配置示例，不要求使用相同服务。更换服务时，应同时核对地址、模型标识与密钥。程序会在基础地址后追加 `/chat/completions`。
+
+`config.toml` 已被 Git 忽略。共享配置时使用不含密钥的 [config.example.toml](config.example.toml)。
+
+### 4. 运行真实 BO3
+
+```powershell
+.\.venv\Scripts\python.exe -m model_rps --bo 3
+```
+
+默认模式为 `live`，此命令会发起真实 API 请求，费用由所用服务计收。`--bo 3` 临时覆盖模板中的 BO9。不加参数运行会使用配置文件里的比赛设置。正常结束后自动请求双方复盘；按 `Ctrl+C` 可以中止，已经写入的日志会保留。
+
+## 配置与常用命令
+
+程序默认读取**当前工作目录**中的 `config.toml`，优先级为 **命令行参数 > TOML 配置 > 内置默认值**。配置文件使用 UTF-8 编码。
+
+| 配置节 | 字段 | 用途 |
+| --- | --- | --- |
+| `[app]` | `mode`、`log_dir` | live / demo，以及日志根目录 |
+| `[app]` | `timeout_seconds`、`retry_delay_seconds` | 每次请求总时限、重试间隔 |
+| `[app]` | `max_output_tokens` | 对局和复盘共用的单次输出上限 |
+| `[match]` | `best_of`、`max_games` | BO 正奇数、包含平局的实际总局数上限 |
+| `[match]` | `move_policy` | locked 锁定出拳 / revisable 允许改拳 |
+| `[match]` | `initiative` | simultaneous 同时行动 / alternating 轮流行动 |
+| `[players.gpt]`、`[players.deepseek]` | `model`、`base_url`、`api_key`、`thinking`、`name` | 双方模型与身份设置 |
+
+内置默认值为真实模式、BO1、同时行动、锁定出拳、双方思考 `off`、60 秒超时、1 秒重试间隔和 20,000 token 输出上限。模板覆盖部分设置：BO9、双方思考 `high`、120 秒超时。模板 GPT 模型为 `gpt-5.6-sol`，内置 GPT 模型为 `gpt-6-luna`；均可自行修改。
+
+省略 `max_games` 时，上限按**最终生效的 BO × 10** 计算；显式设置时不得小于目标胜局数。配置中的相对日志路径基于配置文件所在目录，命令行 `--log-dir` 则基于当前工作目录。
+
+```powershell
+# 使用另一份配置
 .\.venv\Scripts\python.exe -m model_rps --config config.local.toml
 
-# 跳过配置进行模拟，不调用模型
-.\.venv\Scripts\python.exe -m model_rps --no-config --mode demo --bo 3
+# 真实 BO5，最多进行 20 局（包含平局）
+.\.venv\Scripts\python.exe -m model_rps --bo 5 --max-games 20
+
+# 临时调整请求时限与输出上限
+.\.venv\Scripts\python.exe -m model_rps --timeout 180 --max-output-tokens 24000
+
+# 查看全部参数；无需密钥或有效配置
+.\.venv\Scripts\python.exe -m model_rps --help
 ```
 
-`--config` 与 `--no-config` 互斥。默认配置不存在时使用内置值；显式指定的配置不存在则报错。文件存在但语法错误、字段拼错、类型或数值非法时，在请求前退出，不悄悄忽略。`--help` 无需读取配置。
+`--config` 与 `--no-config` 互斥。显式指定的配置不存在、TOML 格式错误或包含非法参数时，程序会在请求前报错。运行模拟比赛建议使用 `--no-config --mode demo`，以免读入真实配置中的思考设置；模拟模式要求双方思考为 `off`。
 
-配置中的相对 `log_dir` 相对于**配置文件所在目录**；CLI 的 `--log-dir` 相对于**当前工作目录**。当前仍固定每局 20 Tick、每次最多 3 次尝试及赛后复盘流程，不开放额外规则配置。
+旧版 `local_secrets.py` 仍兼容：仅当 TOML 中双方都没有 `api_key` 字段时，回退读取其中的 `OPENAI_API_KEY` 和 `DEEPSEEK_API_KEY` 字符串常量。显式 `--secrets-file` 可覆盖双方密钥。首次使用建议直接采用 TOML。
 
-## BO 比赛
+## 比赛规则
 
-通过 `--move-policy` 选择整场比赛的规则；一场 BO 中所有局采用同一模式。
+一场 BO 的目标胜局数为 `N // 2 + 1`，例如 BO3 先赢 2 局、BO5 先赢 3 局。平局不加分，继续下一局；达到实际总局数上限仍无人达标，比赛记为“未决”。同一 BO 内保留双方各自上下文，每局只重置出拳与行动计数。
 
-| 规则 | `locked`（默认） | `revisable`（对照模式） |
+每次响应必须恰好包含一个 `MOVE` 或 `WAIT`，可以附带多个 `SAY`。`SAY` 是公开发言，不等于实际出拳。对手可以知道是否已提交，结算前看不到真实拳型。
+
+### 同时行动（默认）
+
+一个 Tick 内同时请求双方，双方根据 Tick 开始时的状态决策，看不到对手本 Tick 的新响应。两份响应均有效后执行动作并判定结果。
+
+| 出拳规则 | `locked`（默认） | `revisable`（对照模式） |
 | --- | --- | --- |
-| 出拳 | 首次有效 MOVE 锁定 | 最后一次有效 MOVE 生效 |
-| 已提交后再次 MOVE | 忽略该 MOVE，保留原拳型和本轮 SAY，不重试 | 允许跨 Tick 修改，以最后一次为准 |
-| 每轮行动 | 恰好一个 MOVE 或 WAIT，可附带 SAY | 恰好一个 MOVE 或 WAIT，可附带 SAY |
-| 双方提交齐全 | 当前 Tick 全部动作处理后直接结算 | 下一 Tick 为最后行动机会，之后结算 |
-| 第 20 Tick 才提交齐全 | 当 Tick 结算，无第 21 Tick | 追加第 21 Tick 结算 |
+| 有效拳型 | 第一次有效 MOVE | 最后一次有效 MOVE |
+| 后续 MOVE | 忽略，保留原拳型和本轮 SAY | 允许跨 Tick 修改 |
+| 双方均已提交 | 当前 Tick 全部动作处理后结算 | 再进行一个结算 Tick，仍可改拳 |
+| 第 20 Tick 才提交齐全 | 当 Tick 结算 | 追加第 21 Tick 结算 |
 
-上表的 Tick 时机适用于同时行动：第 20 Tick 判定尚未出拳者弃权、双方均未出拳则平局；已结束的对局不再请求动作。所有模式都要求每轮恰好一个 MOVE 或 WAIT；只有 SAY、MOVE 与 WAIT 同时出现、多个 MOVE 或多个 WAIT，均使整份响应无效并重试。SAY 可与 WAIT 或 MOVE 同时出现。违规重试耗尽按技术异常处理，不记弃权。
+常规提交截止为第 20 Tick；仍未出拳的一方弃权，双方都未出拳则平局。未结束且尚未安排结算 Tick 时，第 10、18、19 Tick 结束分别提醒剩余 10、2、1 Tick。
 
 ```powershell
-# 模拟 BO3，先赢 2 局结束
-.\.venv\Scripts\python.exe -m model_rps --no-config --mode demo --bo 3
-
-# 真实 BO5，先赢 3 局；实际最多进行 50 局
-.\.venv\Scripts\python.exe -m model_rps --mode live --bo 5
-
-# 保留原来的改拳规则作对照
-.\.venv\Scripts\python.exe -m model_rps --bo 3 --move-policy revisable
-
-# 自定义实际总局数上限
-.\.venv\Scripts\python.exe -m model_rps --mode live --bo 3 --max-games 10
+# 使用真实配置，观察允许改拳的 BO3
+.\.venv\Scripts\python.exe -m model_rps --bo 3 --initiative simultaneous --move-policy revisable
 ```
 
-- `--bo N` 接受任意正奇数，覆盖配置的 `best_of`；目标胜局数为 `N // 2 + 1`。
-- 平局不加分，继续下一局；弃权正常计分。
-- `--max-games` 包含平局，默认 `10 × N`，不能小于目标胜局数。达到上限无人赢得足够胜局时记为“未决”，保留比分。
-- 技术故障立即中止整场比赛，失败局不算胜负或平局。
-- **同一场 BO 内保留上下文**：模型记得此前的公开交流、结算拳型、结果、比分，以及自己的响应和决策说明。每局只重置 Tick、出拳及当前局状态。
-- 比赛期间双方上下文独立，对手的决策说明和纠错信息不可见；开始新的比赛时清空双方上下文。
+### 轮流行动（实验性）
 
-## 实验性轮流行动
+`alternating` 每次只请求一方，通过校验后立即公开发言和提交状态，另一方下次行动即可看到。它按固定次序轮流行动，不根据 API 返回速度决定先后手。
 
-`initiative = "alternating"` 是行动有先后的实验模式，一次只请求一方；默认仍为 `simultaneous`，不会按 API 返回速度抢先行动。
-
-- 第一局 GPT 席位先手，第二局 DeepSeek 席位先手，此后逐局交换；平局也交换。新比赛重新从第一席位先手开始。
-- 一方完整响应通过校验后，立即处理并公开发言和提交状态；另一方下次请求即可看到。拳型仍在结算前保密。
-- 每方最多 20 次行动，全局最多 40 个行动 Tick。双方出拳齐全时，在当前方全部动作处理后立即结算，不再请求对手。
-- 双方都用完机会后，仅一方未出拳则弃权，双方未出拳则平局。第 39 个 Tick 不提前剥夺后手的第 20 次机会。
-- 每位玩家完成自己的第 10、18、19 次行动后，分别提醒剩余 10、2、1 次；重试不占额外行动机会。
-- 锁定后的 MOVE 被忽略，仍消耗本次行动机会，SAY 正常公开。日志和复盘以 `ignored_actions` 单独标记，不算实际改拳或 WAIT。
-- 只支持 `locked`，与 `revisable` 同时配置会在请求前报错。技术失败中止比赛，保留此前已经公开的行动；不执行失败响应，不继续请求下一方。
+- 第一局 GPT 席位先手，之后逐局交换，平局也交换。
+- 每方最多 20 次行动，全局最多 40 Tick；双方出拳齐全后，在当前完整响应处理后结算。
+- 每位玩家完成自己的第 10、18、19 次行动后提醒剩余次数；重试不消耗行动机会。
+- 仅支持 `locked`，配置为 `alternating + revisable` 会报错。
 
 ```powershell
-# 无 API 请求的轮流行动演示
+# 离线演示
 .\.venv\Scripts\python.exe -m model_rps --no-config --mode demo --initiative alternating --bo 3
 
-# 使用现有模型配置进行真实实验
+# 真实实验
 .\.venv\Scripts\python.exe -m model_rps --initiative alternating --move-policy locked --bo 3
 ```
 
-同一 BO 的上下文仍保留。日志、输入状态和复盘记录均标注行动模式、每局先手及行动次数。当前完成模拟与自动化验证，尚未进行该模式的真实模型实验。
+该模式已有模拟与自动化验证，仍需通过更多真实模型比赛观察行为。
 
-## 赛后公开与复盘
+## 思考、分析与赛后复盘
 
-整场 BO 产生冠军或达到实际总局数上限后，程序自动进行以下步骤：
+双方独立设置思考级别，同一场 BO 的对局与复盘共用设置：
 
-1. 展示最终比分和比赛结果。
-2. 按局号、Tick、玩家顺序公开双方实际执行的动作及其决策说明，改拳模式下包括每次有效改拳。
-3. 向两位模型提供相同的完整赛后记录，各自从自己的视角分析双方策略，给出**整体评价、关键决策和改进建议**。
-4. 在 CLI 和 `chat.log` 展示双方复盘。
+| 配置字段 | 程序允许的值 | CLI 参数 |
+| --- | --- | --- |
+| `players.gpt.thinking` | off、low、medium、high、xhigh、max | `--openai-thinking` |
+| `players.deepseek.thinking` | off、low、high、max | `--deepseek-thinking` |
 
-公开的是模型在对局时生成的正文策略分析（沿用字段名 `decision_summary`），不包含接口思考文本。仅返回接口思考时，正文分析记为 null，赛后显示“未提供正文分析”，复盘仍可依据动作和公开事件进行。整个 BO 结束前不会向对手公开正文分析。失败响应、纠错信息和原始 HTTP 数据不公开；成功行动中锁定后被忽略的 MOVE 单独列出，不混入实际执行动作。
+这些是本项目适配器接受的选项，不代表所有模型和兼容服务都支持。接口拒绝参数时明确报错，不自动降级。仅更换 `model` 不会改变该席位的请求参数方案，接入不兼容模型需要调整适配器。
 
-复盘使用独立提示和完整比赛记录，双方互相看不到尚未完成的复盘。复盘不执行游戏动作，也不改变已确定的比分。真实模式通常额外请求两次，每位模型失败时最多请求三次，沿用超时设置和配置的单次输出上限。某一方复盘失败仍保留另一方成功的内容，并返回退出码 `4`。
+模型可以提供正文策略分析，字段名为 `decision_summary`；当前响应实际返回非空 `reasoning_content` 或 `reasoning` 时，可省略正文分析。仅开启思考或返回思考 token 数不足以替代正文分析。无论是否提供思考文本，动作 JSON 都必须完整有效。
 
-技术异常或用户中止的比赛不自动进入复盘。模拟模式展示明确标注的预设复盘，不发起 API 请求。
+- **正文策略分析**：比赛期间仅保留在该玩家自己的历史与私有日志中，整场 BO 结束后公开。
+- **接口思考文本**：只写入该玩家私有日志，不发送给对手、不回填后续请求，也不纳入公开复盘材料。
 
-## 提示词与自由选择
+产生冠军或达到总局数上限后，程序公开有效动作与正文分析，并让双方分别给出整体评价、关键决策和改进建议。复盘不改变比分。技术异常或用户中止时不自动复盘；模拟模式使用明确标注的预设内容。
 
-对局与复盘提示词统一放在 [src/model_rps/prompts.py](src/model_rps/prompts.py)。`SYSTEM_PROMPT_TEMPLATE` 是通用对局提示，`MOVE_RULES` 是出拳规则，`game_prompt()` 按行动模式组合提示，`REVIEW_PROMPT` 是赛后复盘提示。修改后重新启动程序即可生效。通用模板使用普通字符串，JSON 示例直接使用单花括号；保留 `__MOVE_RULES__` 等占位符供程序填入本场规则。裁判规则仍由 `game.py` 执行，修改提示词不会自动改变游戏规则。
+输出上限对对局和复盘均生效，不要求模型写满。思考可能占用生成额度，实际支持的上限取决于服务；长输出也可能触发超时。模型分析与复盘可能有误，实际动作和结果以裁判记录为准。
 
-对局提示词仅保留比赛目标、状态与信息边界、本场行动顺序、出拳与结算规则、截止条件和输出约束，不再单独解释拳型克制关系。每轮必须选择一个 MOVE 或 WAIT，可以同时 SAY；锁定后的 MOVE 忽略但保留 SAY。仅注入本场模式，不介绍其他模式的规则。
+## 日志
 
-删除对局提示中的策略建议和重复解释。分析只要求提供策略分析，不规定步骤或长度；动作格式集中定义，完整 JSON 示例合并为一份。复盘提示独立维护，本次未调整。提示词不能保证模型完全正确，也不能保证出现更多交流；具体行为需从多场记录中观察。
-
-单次输出上限由 `app.max_output_tokens` 或 `--max-output-tokens` 设置，内置值与模板均为 20,000，对局和复盘共用。它是允许的最大输出量，不要求模型写满，也不代表开启思考模式；实际可用上限取决于所选模型与服务。
-
-## 思考模式
-
-两个开关互相独立，一场 BO 内设置固定，对局与赛后复盘均适用；改变思考设置不会改变游戏规则或提示词。
-
-| 玩家 | 参数 | 可选值 | 内置值 / 模板值 |
-| --- | --- | --- | --- |
-| GPT | `--openai-thinking` | `off`、`low`、`medium`、`high`、`xhigh`、`max` | `off` / `high` |
-| DeepSeek | `--deepseek-thinking` | `off`、`low`、`high`、`max` | `off` / `high` |
-
-```powershell
-# 双方关闭，作为对照
-.\.venv\Scripts\python.exe -m model_rps --bo 3 --openai-thinking off --deepseek-thinking off
-
-# 只开启 DeepSeek
-.\.venv\Scripts\python.exe -m model_rps --bo 3 --deepseek-thinking high --openai-thinking off
-
-# 只开启 GPT
-.\.venv\Scripts\python.exe -m model_rps --bo 3 --openai-thinking medium --deepseek-thinking off
-
-# 双方开启，给每次请求最多 120 秒
-.\.venv\Scripts\python.exe -m model_rps --bo 3 --deepseek-thinking high --openai-thinking medium --timeout 120
-```
-
-DeepSeek 开启时发送 `thinking.type="enabled"` 和所选 `reasoning_effort`；关闭时发送 `thinking.type="disabled"`。GPT 将 `off` 映射为 `reasoning_effort="none"`，其余值直接发送。参数依据 [DeepSeek 思考模式文档](https://api-docs.deepseek.com/guides/thinking_mode/) 和 [GPT-6 Luna 模型文档](https://developers.openai.com/api/docs/models/gpt-6-luna)。兼容服务或自定义模型未必支持全部选项；接口拒绝参数时明确报错，不自动关闭思考重试。模拟模式不支持开启思考。
-
-思考会占用生成额度，输出上限不是单独预留给最终 JSON 的额度。长思考也可能触发请求超时；内置值为 60 秒，模板为 120 秒，可手动调整。截断、空内容或无效 JSON 沿用原有重试和技术异常处理。加载当前配置再运行 demo 时，须把双方思考都覆盖为 off，或直接使用 `--no-config --mode demo`。
-
-`decision_summary` 现在承载正文策略分析，不再限制一至三句。当前响应实际返回了非空 `reasoning_content` 或 `reasoning` 文本时，可以省略正文分析，无需重复生成；只有开启思考或返回思考 token 数不足以满足这个条件。没有思考文本且缺少正文分析时，沿用原有纠错重试额度。接口思考只保存到该玩家的私有日志，不进入后续请求、对手上下文或赛后公开报告；同场 BO 的公开历史、自己的最终响应和正文分析仍正常保留。
-
-2026-10-15 已以 DeepSeek `high`、GPT `medium` 完成一次真实对局和双方复盘，日志目录为 `logs/20261015_010235_022230_45bc151d/`。双方首 Tick 出布，达到单局验证上限后比赛未决，双方复盘成功。DeepSeek 两次均返回思考文本；GPT 对局请求未返回思考文本及思考 token 数，复盘请求则返回了相关字段。缺失字段不表示模型没有思考。这次验证确认接口可用，不用于判断策略优劣。
-
-## 运行日志
-
-启动后会打印本次日志目录。默认目录结构：
+每次运行创建独立目录，启动时打印路径：
 
 ```text
-logs/20261014_153000_唯一编号/
+logs/日期时间_唯一编号/
 ├─ chat.log
-├─ gpt-5.6-sol/
+├─ 模型名1/
 │  ├─ thought.log
 │  └─ debug.log
-└─ deepseek-flash/
+└─ 模型名2/
    ├─ thought.log
    └─ debug.log
 ```
 
-`chat.log` 是人类可读的公开过程，包含系统消息、聊天、结算揭晓、比分、比赛结果，以及赛后公开的动作、决策说明和双方复盘。结算前不显示实际拳型，整场比赛结束前不公开决策说明。
-
-`thought.log` 改为直接阅读的中文分段文本，按“第几局 / Tick / 第几次请求”标识，分别展示接口思考、正文策略分析、拟执行动作、复盘结果以及失败或取消状态。保留分析的换行和段落，正文缩进显示，危险控制字符转义。仅使用接口思考时明确标注未提供正文分析；缺少思考 token 数显示“未提供”，实际 0 则显示 0。复盘分为整体评价、关键决策和改进建议。
-
-“通过校验”不代表动作已经执行；同 Tick 对手失败时双方动作都不会执行，以 `chat.log` 的裁判记录为准。正文分析在比赛期间仅进入自己的历史，赛后才公开；接口思考始终不进入公开记录。失败记录显示原因、纠错反馈和是否重试，包括复盘失败。记录立即写入，不等整局或整场结束。
-
-结构化的 `decision`、`reasoning`、`review` 事件现在统一保存在 `debug.log`，无需解析阅读版文本。`decision.summary` 省略正文分析时为 null，`analysis_source` 标明来源。仍然每次运行五份日志。此格式只影响新运行，旧日志不改写；旧 `thought.log` 仍可能是 JSON 行格式。
-
-`kind=reasoning` 单独记录接口返回的思考内容，同时写入该玩家的 `debug.log`。字段包含请求的思考级别、来源字段、文本、接口提供的思考 token 数和结束原因。`status` 为 `returned`（取得文本）、`not_returned`（未返回文本）或 `invalid_field`（返回字段类型不支持）；缺失用量为 null，不能当作 0。思考记录不代表最终动作有效，截断或无效响应也可能已有思考文本。开启思考后取得有效的响应消息时，即使没有思考文本也会记录状态；超时等未取得响应消息的情况由失败事件记录。
-
-`debug.log` 记录该玩家的输入、请求正文、HTTP 状态和响应正文、原始模型输出、接口提供的 token 用量、耗时、错误、重试与取消，包含赛后复盘请求。比赛开始记录 `move_policy` 和双方思考设置；每次 `request_config` 记录模型、请求的思考级别与输出上限。游戏快照包含模式及自己的锁定状态，复盘记录也包含比赛模式。该文件每行一个 JSON 对象，用局号、Tick、请求次数区分；请求记录的 `phase` 为 `game` 或 `review`。复盘请求的局号和 Tick 均为 `0`，不增加比赛局数或 Tick。用量缺失记录为 null，模拟模式不产生 HTTP 事件。
-
-日志使用 UTF-8，每条记录立即 flush，异常退出时保留已经产生的记录。创建或写入失败会停止比赛。不保存鉴权头，并过滤本次运行的两个 API key。默认 `logs/` 目录不纳入 Git；自定义日志目录时需自行设置对应忽略规则。
-
-使用 `--log-dir 路径` 更改日志根目录，每次运行仍创建新子目录。
-
-## 模拟场景
-
-```powershell
-.\.venv\Scripts\python.exe -m model_rps --no-config --mode demo --scenario deadline
-```
-
-| `--scenario` | 展示内容 |
+| 文件 | 内容 |
 | --- | --- |
-| `locked` | 锁定模式默认场景：模拟玩家1先提交，下一 Tick 继续发言，模拟玩家2提交后当刻结算 |
-| `change` | 改拳模式默认场景：出拳后修改，按最终拳型判定；需 `--move-policy revisable` |
-| `settlement` | 第 1 Tick 双方出石头；第 2 Tick 结算刻模拟玩家1改为布并获胜；需 `--move-policy revisable` |
-| `draw` | 双方一直等待，每局 20 Tick 后平局；反复开局，直至比赛达到实际总局数上限 |
-| `forfeit` | 仅模拟玩家1出拳，模拟玩家2到期弃权 |
-| `deadline` | 第 20 Tick 双方出拳：锁定模式当刻结算，改拳模式第 21 Tick 结算 |
-| `retry` | WAIT 与 MOVE 同时出现被拒绝，在同一 Tick 纠正后完成对局 |
+| `chat.log` | 公开发言、系统消息、结算、比分、赛后公开分析及双方复盘 |
+| `thought.log` | 按局号、Tick 和尝试次数分段的中文阅读版：接口思考、正文分析、动作、复盘及失败状态 |
+| `debug.log` | JSON Lines 格式的输入、响应、结构化事件、用量、耗时、错误与重试记录 |
 
-未指定 `--scenario` 时随模式选择默认场景；锁定模式指定 `change` 或 `settlement` 会在运行前报配置错误。模拟场景在每局重新开始，会重复相同结果。只想观察一局平局时，可运行 `--no-config --mode demo --scenario draw --max-games 1`，最终比赛状态为未决。`--scenario` 只用于模拟模式，不会自动切换运行模式。
+“通过校验”不等于“已执行”。同时行动时，若对手在该 Tick 失败，双方暂存动作都不执行；轮流行动时保留此前已完成的行动。以公开裁判记录判断实际结果。锁定后被忽略的 MOVE 在私有记录与赛后报告中单独标记为 `ignored_actions`。
 
-## 接入真实模型
+日志使用 UTF-8，逐条写入；写入失败会中止比赛。不记录鉴权头，并过滤本次配置的两把 API key。私有日志仍包含模型输入、输出和分析，分享前应检查内容。默认 `logs/` 已被 Git 忽略；自定义目录需自行配置忽略规则。
 
-优先在 `config.toml` 的两个玩家节中填写各自的 `api_key`，并让密钥、模型标识与服务地址对应。配置不纳入 Git。程序不会输出密钥，也不把完整配置写入日志。
+## 常见问题
 
-兼容旧版的 `local_secrets.py`，格式仍为两个字符串常量：
+| 情况 | 处理方式 |
+| --- | --- |
+| `No module named model_rps` | 在项目根目录，用同一个虚拟环境的 Python 执行 `-m pip install -e .` |
+| 找不到配置或密钥为空 | 检查当前目录的 `config.toml`，或用 `--config` 指定路径；填写双方密钥 |
+| HTTP 401 | 核对密钥是否属于当前 `base_url` 对应的服务 |
+| 模型或参数不支持 | 核对服务支持的模型标识、思考档位、JSON 输出和输出上限 |
+| 请求超时或 JSON 被截断 | 查看私有 `debug.log`，结合服务限制调整超时、思考级别及输出上限 |
+| 模拟模式提示思考设置不支持 | 使用 `--no-config --mode demo`，跳过真实配置 |
+| 双方很快出拳，几乎不聊天 | 这是规则允许的模型选择；提示词不强制聊天或等待 |
 
-```python
-DEEPSEEK_API_KEY = "你的 DeepSeek API key"
-OPENAI_API_KEY = "你的 OpenAI API key"
-```
+每位玩家每次行动最多尝试 3 次，格式纠错和网络重试共用额度；HTTP 408、409、429 和 5xx 可重试，其他 HTTP 错误直接中止。重试仍使用该次行动开始时的状态，只重新请求出错的一方。
 
-只有 TOML 中双方都未填写 `api_key` 字段时，才回退读取该文件；写了空字符串或只填一方会报错，不混用两个来源。显式 `--secrets-file 路径` 可以用指定旧文件的两把密钥覆盖 TOML 密钥，其他配置照常生效。旧文件同样被 Git 忽略；程序只读取这两个常量，不执行其中其他 Python 语句。
+退出码：`0` 冠军产生且复盘完成；`1` 技术或日志异常；`2` 配置错误；`3` 比赛未决且复盘完成；`4` 比赛结束但复盘失败；`130` 用户中止。复盘失败不改变已确定的比赛结果。
 
-```powershell
-.\.venv\Scripts\python.exe -m model_rps --mode live
-```
-
-`live` 是默认模式，会向两个服务发起实际 API 请求，因此上面的 `--mode live` 可以省略。密钥缺失、为空或格式不正确时，程序会在发起请求前退出。
-
-| 玩家 | 模板 API 基础地址 | 模板模型标识 |
-| --- | --- | --- |
-| GPT | `https://ai.yuhuantin.icu/v1` | `gpt-5.6-sol` |
-| DeepSeek V4.1 Flash | `https://api.deepseek.com` | `deepseek-flash` |
-
-玩家身份使用配置的 `name`，省略时使用实际模型标识，例如 `gpt-5.6-sol` 与 `deepseek-flash`。模型输入的 `player`、历史事件、胜者、比分键、赛后报告，以及终端和新日志统一使用这些名称。例如比分显示为 `gpt-5.6-sol 2 : 1 deepseek-flash`。旧日志保留原样，阅读旧记录时以该场 `match_start.players` 为准。未配置 GPT 模型时仍使用内置的 `gpt-6-luna`。
-
-未指定显示名时，自定义模型标识会同步更新身份和日志目录；也可以用 `--openai-name`、`--deepseek-name` 覆盖显示名。含路径分隔符等不适用于文件名的字符时，仅目录名作安全转换。双方显示名相同则附加“玩家1/玩家2”区分；模拟模式使用“模拟玩家1/模拟玩家2”。玩家自己生成的发言、决策说明与 HTTP 原文不作名称替换。
-
-DeepSeek 使用官方服务，GPT 使用用户指定的兼容服务；每个玩家分别使用对应服务的密钥。现有适配器已完成真实对局验证，本次配置改动通过模拟 HTTP 验证，没有额外发起付费请求。
-
-此前第三方 DeepSeek 在真实联调中出现超时和缺少 JSON 结尾的响应，因此改用官方服务。原服务使用的 DeepSeek 标识为 `deepseek-v4.1-flash`；切换地址时必须同时匹配服务的模型标识和密钥，不能仅替换地址。当前本地密钥文件保留原密钥为 `DEEPSEEK_GATEWAY_API_KEY`，程序不读取该备份字段。
-
-程序自动在基础地址后追加 `/chat/completions`。可以通过 `--deepseek-base-url`、`--openai-base-url`、`--deepseek-model`、`--openai-model` 覆盖地址或模型标识。覆盖模型名称仍使用该玩家的参数方案；适配不兼容的模型时，需要在 `players.py` 中调整 `ModelSpec` 或新增实现 `MatchPlayer` 的适配器，包含对局响应、比赛上下文管理与赛后复盘。
-
-双方按配置发送思考参数；具体映射见上方“思考模式”。两者都请求 JSON 输出，对局和复盘共用 `max_output_tokens`。响应正文必须包含非空 `actions` 列表；未返回接口思考文本时还必须包含非空 `decision_summary`。如提供该字段，仍须是非空字符串。思考文本不能替代动作 JSON，不改变动作校验、截断处理或重试次数。调用方式依据 [DeepSeek JSON Output](https://api-docs.deepseek.com/guides/json_mode/) 和 [OpenAI Chat Completions 文档](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create)。
-
-## 超时、重试与退出状态
-
-- 每次请求总时限由 `app.timeout_seconds` 设置，内置 60 秒、模板 120 秒，可用 `--timeout` 覆盖。
-- 每位玩家每个 Tick 最多请求 3 次，网络错误和格式纠错共用额度。
-- 真实模式重试间隔由 `app.retry_delay_seconds` 设置，内置 1 秒，可用 `--retry-delay` 覆盖；模拟模式不增加等待时间。
-- HTTP 408、409、429 和 5xx 可重试；其他 HTTP 错误（例如 401）直接中止，提示状态码。
-- 重试时只请求出错的一方，仍使用同一份 Tick 开始状态。
-- CLI 错误概况不会打印密钥、服务器原文或结算前的拳型；私有 debug 日志保留脱敏后的响应正文。
-
-退出码：`0` 表示产生比赛冠军且复盘完成，`1` 表示技术异常或日志故障中止，`2` 表示参数或本地配置错误，`3` 表示达到总局数上限仍未决且复盘完成，`4` 表示比赛已结束但至少一方复盘失败，`130` 表示用户按 Ctrl+C 中止。复盘失败不改变比赛的冠军或未决状态。
-
-更多参数：
-
-```powershell
-.\.venv\Scripts\python.exe -m model_rps --help
-```
-
-## 项目结构
+## 开发与测试
 
 ```text
 model-rps-protocol/
-├─ README.md                    项目介绍、环境与进度说明
-├─ model-rps-protocol-v0.2.md    游戏规则、日志与比赛协议
-├─ pyproject.toml               Python 项目信息与依赖声明
-├─ .gitignore                   Git 忽略规则
-├─ config.example.toml          可提交的配置模板，不含密钥
-├─ config.toml                  本地运行配置与 API key，不纳入 Git
-├─ local_secrets.py             旧版密钥文件，兼容保留且不纳入 Git
-├─ .venv/                       已有的本地 Python 环境，不纳入 Git
-├─ logs/                        每次运行的日志，不纳入 Git
-├─ src/
-│  └─ model_rps/
-│     ├─ __init__.py            Python 包标记与说明
-│     ├─ __main__.py            python -m model_rps 入口
-│     ├─ game.py                状态、动作执行与结果判定
-│     ├─ runner.py              Tick 推进、并发请求与重试协调
-│     ├─ match.py               BO 比赛、比分和比赛内上下文管理
-│     ├─ postmatch.py           赛后记录、公开说明与双方独立复盘
-│     ├─ diagnostics.py         并发请求诊断与标识
-│     ├─ logs.py                文件记录、脱敏和日志生命周期
-│     ├─ identities.py          模型身份显示与安全日志目录
-│     ├─ config.py              TOML 读取、合并与启动前校验
-│     ├─ players.py             模型接入与响应处理
-│     ├─ prompts.py             对局、模式规则与赛后复盘提示词
-│     └─ cli.py                 命令行入口与事件展示
-└─ tests/
-   ├─ test_game.py              裁判、动作校验、可见性和到期判定
-   ├─ test_runner.py            并发、重试、超时与取消
-   ├─ test_players.py           模拟 HTTP 请求与模型响应处理
-   ├─ test_cli.py               命令行场景、密钥读取和展示
-   ├─ test_config.py            配置优先级、校验、密钥来源与请求集成
-   ├─ test_match.py             BO 判定、跨局记忆和新比赛重置
-   ├─ test_logs.py              日志内容、脱敏、取消与写入故障
-   ├─ test_postmatch.py         赛后公开、复盘输入、重试和故障隔离
-   ├─ test_locked.py            锁定规则、违规纠错、即时结算与模式切换
-   ├─ test_alternating.py       轮流行动、先手轮换、每方上限、失败与复盘
-   ├─ test_thinking.py          思考参数、日志隔离、缺失字段与失败处理
-   └─ test_identities.py        模型名、跨局历史、复盘与日志一致性
+├─ README.md                     安装与使用说明
+├─ model-rps-protocol-v0.2.md     详细协议
+├─ config.example.toml           无密钥的配置模板
+├─ pyproject.toml                Python 版本、依赖与入口
+├─ src/model_rps/
+│  ├─ __main__.py / cli.py       启动与命令行展示
+│  ├─ config.py                  配置读取与校验
+│  ├─ game.py                    状态、动作与裁判规则
+│  ├─ runner.py / match.py       行动调度、重试与 BO 比赛
+│  ├─ players.py                 模型适配器与模拟玩家
+│  ├─ prompts.py                 对局与复盘提示词
+│  ├─ postmatch.py               赛后公开与复盘
+│  ├─ logs.py / diagnostics.py   日志与诊断
+│  └─ identities.py              玩家名称与日志目录
+└─ tests/                        自动化测试
 ```
 
-## 运行测试
+对局和复盘提示词集中在 [prompts.py](src/model_rps/prompts.py)，修改后重启程序生效。`SYSTEM_PROMPT_TEMPLATE` 使用普通字符串，保留 `__MOVE_RULES__` 等占位符；`game_prompt()` 按当前模式组合规则。修改提示词不会自动修改 [game.py](src/model_rps/game.py) 中的裁判逻辑。
 
-测试使用 Python 标准库 `unittest`；模型请求通过 HTTPX 的模拟传输验证，不需要真实密钥。
+以 `-e .` 安装后，修改源文件无需重新安装；依赖声明变化时再执行安装命令。
 
 ```powershell
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
-核心覆盖：两种出拳模式的九种拳型组合、锁定后忽略 MOVE 但保留 SAY、每轮恰好一个 MOVE/WAIT、聊天并等待、当 Tick 结算、模式切换与日志，跨 Tick 与结算刻改拳、结算前保密、10/18/19 提醒、到期弃权或平局、第 20/21 Tick 边界、整份响应拒绝、同时行动的信息隔离、结算刻重试与故障、HTTP 错误、请求取消、BO 比赛、同场记忆、新比赛清空、日志脱敏，以及赛后公开与复盘失败隔离。
+测试使用标准库 `unittest` 和 HTTPX 模拟传输，不调用真实模型。覆盖裁判规则、同时与轮流行动、上下文隔离、配置、请求重试、日志、思考字段和赛后复盘。
 
-轮流行动测试覆盖双方先手的九种结果、后手即时可见信息、每方 20 次机会与 40 Tick 边界、平局后交换先手、重试不增加行动次数、故障保留此前行动、超时与取消不启动下一方、TOML/CLI 配置，以及真实模式模拟 HTTP 的 BO 历史、忽略动作、日志与复盘链路。
+更多离线场景可以通过 `--scenario` 选择，例如：
 
-思考测试覆盖双方关闭、仅一方开启、双方开启，所有级别的请求参数，两种出拳规则及复盘，私有思考不进入后续上下文，缺失字段与用量、截断、无效 JSON、超时、参数拒绝和日志写入失败。
+```powershell
+# 到期出拳
+.\.venv\Scripts\python.exe -m model_rps --no-config --mode demo --scenario deadline
 
-分析测试覆盖原生思考省略正文分析、正文分析回退、仅有思考 token 数或无效思考字段、重试之间不得沿用思考可用性，以及缺少正文分析时的完整 BO、日志和赛后复盘。
+# 观察一局到期平局，退出码为 3（比赛未决）
+.\.venv\Scripts\python.exe -m model_rps --no-config --mode demo --scenario draw --max-games 1
 
-配置测试覆盖读取与跳过配置、显式文件缺失、CLI 覆盖、相对路径、BO 派生上限、非法字段与类型、空或缺失密钥、旧密钥文件覆盖、模型显示名，以及 BO 历史、复盘、请求参数和日志的完整链路。测试隔离工作区配置，不调用真实模型。
+# 结算 Tick 改拳
+.\.venv\Scripts\python.exe -m model_rps --no-config --mode demo --move-policy revisable --scenario settlement
+```
