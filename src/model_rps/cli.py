@@ -34,28 +34,39 @@ def display_text(text: str) -> str:
 
 
 class Console:
-    def __init__(self, names: dict[str, str], logs: RunLogs | None = None) -> None:
+    def __init__(self, names: dict[str, str], logs: RunLogs | None = None, *, debug: bool = False) -> None:
         self.names = {key: display_text(value) for key, value in names.items()}
         self.logs = logs
         self.game = 0
         self.tick = 0
+        self.debug = debug
 
-    def write(self, text: str) -> None:
+    def write(self, text: str, *, debug_only: bool = False) -> None:
         if self.logs is not None:
             text = self.logs.redact(text)
             self.logs.chat(text, game=self.game, tick=self.tick)
-        print(text, flush=True)
+        if not debug_only or self.debug:
+            print(text, flush=True)
+
+    def request_progress(self, game: int, record: dict) -> None:
+        if not self.debug or record['kind'] != 'stream_status':
+            return
+        label = {'waiting': '等待响应', 'thinking': '接收思考', 'generating': '接收正文'}[record['status']]
+        phase = '复盘' if record.get('phase') == 'review' else f"第 {game} 局 Tick {record['tick']}"
+        text = f"System：{self.names[record['player']]} · {phase} · 第 {record['attempt']} 次请求：{label}。"
+        # 进度仅显示在调试终端；原始状态已写入 debug.log，不注入公开历史。
+        print(self.logs.redact(text) if self.logs else text, flush=True)
 
     def event(self, event: Event) -> None:
         self.tick = event.tick
         name = self.names.get(event.player, "System")
         if event.kind == "tick":
             if event.text == "settlement":
-                self.write(f"\n── 结算 Tick {event.tick}（最后一次行动机会）──")
+                self.write(f"\n── 结算 Tick {event.tick}（最后一次行动机会）──", debug_only=True)
             else:
-                self.write(f"\n── Tick {event.tick}/{MAX_TICKS} ──")
+                self.write(f"\n── Tick {event.tick}/{MAX_TICKS} ──", debug_only=True)
         elif event.kind == "turn":
-            self.write(f"\n── 行动 Tick {event.tick}/{MAX_TICKS * 2} · {name} 第 {event.text}/{MAX_TICKS} 次行动 ──")
+            self.write(f"\n── 行动 Tick {event.tick}/{MAX_TICKS * 2} · {name} 第 {event.text}/{MAX_TICKS} 次行动 ──", debug_only=True)
         elif event.kind == "turn_reminder":
             self.write(f"System：{name}，{event.text}")
         elif event.kind == "move_ignored":
@@ -67,8 +78,7 @@ class Console:
             self.write(f"System：{name} {action}。")
         elif event.kind == "wait":
             self.write(f"System：{name} 本 Tick 选择等待。")
-        elif event.kind == "reveal":
-            self.write(f"System：{name} → {GESTURE_NAMES[event.text]}")
+        # reveal 仍在裁判事件与复盘数据中；终端和 chat.log 由 result 统一展示。
         elif event.kind in ("retry", "error"):
             self.write(f"System：{name}，{display_text(event.text)}")
         elif event.kind in ("reminder", "settlement_pending"):
@@ -89,6 +99,10 @@ class Console:
             text = "双方拳型相同，平局。"
         else:
             text = f"{self.names[result.winner]} 获胜。"
+        if result.reason != EndReason.TECHNICAL_ERROR:
+            moves = '；'.join(f"{self.names[player]} → {GESTURE_NAMES[move] if move is not None else '未出拳'}"
+                             for player, move in zip(('A', 'B'), state.moves))
+            text = f'{moves}；{text}'
         self.write(f"System：{text}")
 
 
@@ -124,6 +138,7 @@ def make_parser(config: dict | None = None) -> argparse.ArgumentParser:
     source.add_argument("--no-config", action="store_true", help="忽略 TOML，使用内置默认值和命令行参数")
     parser.add_argument("--mode", choices=("demo", "live"), default="live",
                         help="live 真实模型（默认）；demo 模拟对局")
+    parser.add_argument('--debug', action='store_true', help='显示 Tick 标题和流式请求进度；默认隐藏，不影响日志记录')
     parser.add_argument("--move-policy", choices=tuple(MovePolicy), default=MovePolicy.LOCKED.value,
                         help="locked 提交后锁定（默认）；revisable 允许改拳，下一 Tick 结算")
     parser.add_argument("--scenario", choices=("locked", "change", "settlement", "draw", "forfeit", "deadline", "retry"),
@@ -173,7 +188,7 @@ async def play(args: argparse.Namespace) -> int:
         raise ValueError("change 和 settlement 场景需要 --move-policy revisable。")
 
     async def execute(factory, names, logs):
-        console = Console(names, logs)
+        console = Console(names, logs, debug=args.debug)
         players = factory()
         archive = MatchArchive()
         print(f"日志目录：{display_text(str(logs.path.resolve()))}", flush=True)
@@ -190,7 +205,7 @@ async def play(args: argparse.Namespace) -> int:
                        target_wins=config.target_wins, players=names, mode=settings.mode,
                        timeout=policy.timeout, retry_delay=policy.retry_delay, move_policy=config.move_policy,
                        thinking=thinking, initiative=settings.initiative,
-                       max_output_tokens=settings.max_output_tokens, stream=settings.stream,
+                       max_output_tokens=settings.max_output_tokens, stream=settings.stream, debug=args.debug,
                        stream_first_timeout_seconds=settings.stream_first_timeout_seconds,
                        stream_idle_timeout_seconds=settings.stream_idle_timeout_seconds)
 
@@ -213,11 +228,7 @@ async def play(args: argparse.Namespace) -> int:
         def request(number, record):
             logs.request(number, record)
             archive.request(number, record)
-            if record['kind'] == 'stream_status':
-                label = {'waiting': '等待响应', 'thinking': '接收思考', 'generating': '接收正文'}[record['status']]
-                phase = '复盘' if record.get('phase') == 'review' else f"第 {number} 局 Tick {record['tick']}"
-                # 只向终端报告阶段，不把片段、拳型或思考注入公开事件与模型上下文。
-                print(logs.redact(f"System：{console.names[record['player']]} · {phase} · 第 {record['attempt']} 次请求：{label}。"), flush=True)
+            console.request_progress(number, record)
 
         result = await run_match(lambda: players, config=config, policy=policy, on_start=start,
                                  on_event=lambda number, event: console.event(event),

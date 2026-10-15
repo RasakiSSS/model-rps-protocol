@@ -295,14 +295,18 @@ class StreamingTests(unittest.IsolatedAsyncioTestCase):
                     return response(complete(content, 'NATIVE-PRIVATE', {'completion_tokens': 20}))
 
                 client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+                debug = initiative == 'alternating'
                 args = make_parser().parse_args(['--no-config', '--stream', '--bo', '3', '--initiative', initiative,
-                                                 '--move-policy', rule, '--secrets-file', str(keys), '--log-dir', str(root / 'logs')])
+                                                 '--move-policy', rule, '--secrets-file', str(keys), '--log-dir', str(root / 'logs')]
+                                                + (['--debug'] if debug else []))
                 output = io.StringIO()
                 with patch('model_rps.cli.httpx.AsyncClient', return_value=client), contextlib.redirect_stdout(output):
                     self.assertEqual(await play(args), 0)
                 self.assertEqual(sum(body['messages'][0]['content'] == REVIEW_PROMPT for body in bodies), 2)
                 self.assertNotIn('NATIVE-PRIVATE', output.getvalue())
-                self.assertIn('接收思考', output.getvalue())
+                self.assertEqual('接收思考' in output.getvalue(), debug)
+                self.assertEqual('等待响应' in output.getvalue(), debug)
+                self.assertEqual('接收正文' in output.getvalue(), debug)
                 self.assertNotIn('PRIVATE-ANALYSIS', output.getvalue().split('赛后公开')[0])
                 run, = (root / 'logs').iterdir()
                 self.assertNotIn('NATIVE-PRIVATE', (run / 'chat.log').read_text(encoding='utf-8'))
