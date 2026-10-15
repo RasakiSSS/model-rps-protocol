@@ -10,7 +10,7 @@ from typing import Callable
 
 from .game import Action, Event, GameState, InvalidResponse, MovePolicy, PlayerView, abort, advance, parse_decision, validate_turn
 from .diagnostics import LogError, TraceHandler, request_trace, trace
-from .players import Player, PlayerError
+from .players import ModelResponse, Player, PlayerError
 
 MAX_ATTEMPTS = 3
 REQUEST_TIMEOUT_SECONDS = 60.0
@@ -47,11 +47,14 @@ async def _request_actions(player: Player, view: PlayerView, policy: RequestPoli
             try:
                 # 覆盖整个请求的时限，不只限制网络中两次数据之间的等待。
                 async with asyncio.timeout(policy.timeout):
-                    raw = await player.respond(view, feedback)
+                    response = await player.respond(view, feedback)
+                raw = response.content if isinstance(response, ModelResponse) else response
+                has_reasoning = isinstance(response, ModelResponse) and response.has_reasoning
                 trace("raw_response", content=raw)
-                decision = parse_decision(raw)
+                decision = parse_decision(raw, has_reasoning=has_reasoning)
                 validate_turn(decision.actions, view.own_move, view.move_policy)
                 trace("decision", summary=decision.summary, status="validated",
+                      analysis_source="reasoning" if has_reasoning else "decision_summary",
                       actions=[action.to_dict() for action in decision.actions])
                 trace("request_end", status="valid", elapsed_seconds=perf_counter() - started)
                 return decision.actions

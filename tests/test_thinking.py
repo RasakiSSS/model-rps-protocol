@@ -12,7 +12,7 @@ import httpx
 
 from model_rps.cli import make_parser, play
 from model_rps.diagnostics import LogError, request_trace
-from model_rps.game import EndReason, GameState, MovePolicy
+from model_rps.game import EndReason, GameState, InvalidResponse, MovePolicy, parse_decision
 from model_rps.logs import RunLogs
 from model_rps.players import (ChatCompletionPlayer, DEEPSEEK, OPENAI, DEEPSEEK_THINKING_MODES,
                                OPENAI_THINKING_MODES, PlayerError, REVIEW_PROMPT, ScriptedPlayer,
@@ -105,6 +105,8 @@ class ThinkingTests(unittest.IsolatedAsyncioTestCase):
                     if ctx["match"]["game"] == 2:
                         self.assertGreater(len(body["messages"]), 2)
                     content = decision("Paper" if player == "A" else "Rock", f"SUMMARY-{player}")
+                    if mode != "off":
+                        content = json.dumps({"actions": json.loads(content)["actions"]})
                 self.assertEqual(body.get("reasoning_effort"),
                                  (None if mode == "off" else mode) if player == "B" else ("none" if mode == "off" else mode))
                 extra = {"reasoning_content": f"NATIVE-{player} test-key-a test-key-b"} if mode != "off" else {}
@@ -119,12 +121,19 @@ class ThinkingTests(unittest.IsolatedAsyncioTestCase):
                 with patch("model_rps.cli.httpx.AsyncClient", return_value=client), contextlib.redirect_stdout(io.StringIO()) as output:
                     self.assertEqual(await play(args), 0)
                 self.assertNotIn("NATIVE-", output.getvalue())
-                self.assertIn("SUMMARY-A", output.getvalue())
+                self.assertEqual("SUMMARY-A" in output.getvalue(), a_mode == "off")
+                if a_mode != "off" or b_mode != "off":
+                    self.assertIn("未提供正文分析", output.getvalue())
                 self.assertIn(f"参赛模型：{OPENAI.model} vs {DEEPSEEK.model}", output.getvalue())
                 root, = (path / "logs").iterdir()
                 for player, mode in ((OPENAI.model, a_mode), (DEEPSEEK.model, b_mode)):
                     rows = [json.loads(s) for s in (root / f"{player}/thought.log").read_text(encoding="utf-8").splitlines()]
                     native = [r for r in rows if r["kind"] == "reasoning"]
+                    decisions = [r for r in rows if r["kind"] == "decision"]
+                    self.assertEqual(len(decisions), 2)
+                    self.assertTrue(all(r["analysis_source"] == ("decision_summary" if mode == "off" else "reasoning")
+                                        for r in decisions))
+                    self.assertTrue(all((r["summary"] is None) == (mode != "off") for r in decisions))
                     self.assertEqual(len(native), 0 if mode == "off" else 3)
                     if native:
                         self.assertEqual([r["phase"] for r in native], ["game", "game", "review"])
@@ -156,6 +165,58 @@ class ThinkingTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(record["content"])
             self.assertEqual(record["reasoning_tokens"], expected)
 
+    async def test_missing_reasoning_requires_analysis_even_with_thinking_tokens(self):
+        for extra in ({}, {"reasoning_content": " "}, {"reasoning_content": {"text": "invalid"}}):
+            bodies, events = [], []
+
+            def handler(request):
+                body = json.loads(request.content)
+                bodies.append(body)
+                content = '{"actions":[{"type":"MOVE","move":"Paper"}]}' if len(bodies) == 1 else decision()
+                return completion(content, usage={"reasoning_tokens": 100}, **extra)
+
+            with self.subTest(extra=extra):
+                async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+                    player = ChatCompletionPlayer(client, configure_thinking(OPENAI, "high"), "key")
+                    state = await run_game(player, ScriptedPlayer([decision("Rock")]), policy=FAST, on_request=events.append)
+                self.assertEqual(state.result.winner, "A")
+                self.assertEqual(len(bodies), 2)
+                correction = json.loads(bodies[1]["messages"][-1]["content"])["correction"]
+                self.assertIn("本次接口未返回思考文本", correction)
+                self.assertEqual(len([r for r in events if r["kind"] == "decision" and r["player"] == "A"]), 1)
+
+    async def test_reasoning_permission_is_per_response_and_does_not_bypass_action_validation(self):
+        bodies, events = [], []
+
+        def handler(request):
+            bodies.append(json.loads(request.content))
+            if len(bodies) == 1:
+                return completion('{"actions":[{"type":"WAIT"},{"type":"MOVE","move":"Paper"}]}',
+                                  reasoning_content="PRIVATE-ONLY-FIRST-ATTEMPT")
+            if len(bodies) == 2:
+                return completion('{"actions":[{"type":"MOVE","move":"Paper"}]}')
+            return completion(decision())
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            player = ChatCompletionPlayer(client, configure_thinking(DEEPSEEK, "high"), "key")
+            state = await run_game(player, ScriptedPlayer([decision("Rock")]), policy=FAST, on_request=events.append)
+        self.assertEqual(state.result.winner, "A")
+        self.assertEqual(len(bodies), 3)
+        self.assertIn("WAIT 必须是唯一动作", json.loads(bodies[1]["messages"][-1]["content"])["correction"])
+        self.assertIn("未返回思考文本", json.loads(bodies[2]["messages"][-1]["content"])["correction"])
+        self.assertNotIn("PRIVATE-ONLY-FIRST-ATTEMPT", json.dumps(bodies))
+        self.assertEqual(len([r for r in events if r["kind"] == "decision" and r["player"] == "A"]), 1)
+
+    async def test_reasoning_does_not_relax_json_or_provided_analysis_types(self):
+        accepted = parse_decision('{"actions":[{"type":"WAIT"}]}', has_reasoning=True)
+        self.assertIsNone(accepted.summary)
+        for raw in ('{"actions":[{"type":"WAIT"}],"actions":[{"type":"WAIT"}]}',
+                    '{"actions":[{"type":"WAIT"}],"has_reasoning":true}',
+                    *[json.dumps({"decision_summary": value, "actions": [{"type": "WAIT"}]})
+                      for value in (None, "", " ", 1, [])]):
+            with self.subTest(raw=raw), self.assertRaises(InvalidResponse):
+                parse_decision(raw, has_reasoning=True)
+
     async def test_alternate_or_invalid_optional_reasoning_fields_do_not_become_actions(self):
         for field, value, status in (("reasoning", "provider text", "returned"),
                                      ("reasoning_content", {"actions": []}, "invalid_field"),
@@ -165,7 +226,8 @@ class ThinkingTests(unittest.IsolatedAsyncioTestCase):
                 player = ChatCompletionPlayer(client, configure_thinking(OPENAI, "medium"), "key")
                 with request_trace(events.append, player="B", tick=1, attempt=1):
                     raw = await player.respond(GameState().view_for("B"))
-            self.assertEqual(raw, decision())
+            self.assertEqual(raw.content, decision())
+            self.assertEqual(raw.has_reasoning, status == "returned")
             record = next(r for r in events if r["kind"] == "reasoning")
             self.assertEqual(record["status"], status)
             self.assertEqual(record["content"], value if status == "returned" else None)

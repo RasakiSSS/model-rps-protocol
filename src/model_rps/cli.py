@@ -217,7 +217,8 @@ async def play(args: argparse.Namespace) -> int:
                     console.game, console.tick = decision["game"], decision["tick"]
                     label = f"第 {console.game} 局 Tick {console.tick} {console.names[decision['player']]}"
                     actions = json.dumps(decision["actions"], ensure_ascii=False)
-                    console.write(f"{label}｜动作：{display_text(actions)}｜说明：{display_text(decision['summary'])}")
+                    analysis = decision["summary"] or "未提供正文分析；接口思考已记录于私有日志。"
+                    console.write(f"{label}｜动作：{display_text(actions)}｜分析：{display_text(analysis)}")
             console.game, console.tick = 0, 0
             console.write("\nSystem：赛后复盘开始，双方各自分析完整记录。")
             logs.lifecycle("review_start")

@@ -92,7 +92,7 @@ def _reject_constant(value: str) -> None:
 
 @dataclass(frozen=True)
 class Decision:
-    summary: str
+    summary: str | None
     actions: tuple[Action, ...]
 
 
@@ -109,13 +109,16 @@ def parse_json_object(raw: str) -> dict:
     return payload
 
 
-def parse_decision(raw: str) -> Decision:
+def parse_decision(raw: str, *, has_reasoning: bool = False) -> Decision:
     """严格解析整个 JSON 对象；任何一个动作无效则全部拒绝。"""
     payload = parse_json_object(raw)
-    if set(payload) != {"decision_summary", "actions"}:
-        raise InvalidResponse("响应必须只包含 decision_summary 和 actions 两个字段。")
-    if not isinstance(payload["decision_summary"], str) or not payload["decision_summary"].strip():
-        raise InvalidResponse("decision_summary 必须是非空字符串，简短说明本次决策。")
+    if set(payload) not in ({"decision_summary", "actions"}, {"actions"}):
+        raise InvalidResponse("响应只允许包含 decision_summary 和 actions 字段。")
+    if "decision_summary" not in payload:
+        if not has_reasoning:
+            raise InvalidResponse("本次接口未返回思考文本，请在 decision_summary 中提供策略分析。")
+    elif not isinstance(payload["decision_summary"], str) or not payload["decision_summary"].strip():
+        raise InvalidResponse("decision_summary 如提供，必须是非空的策略分析字符串。")
     if not isinstance(payload["actions"], list) or not payload["actions"]:
         raise InvalidResponse("actions 必须是非空动作列表；主动等待请使用 WAIT。")
     actions = []
@@ -140,7 +143,7 @@ def parse_decision(raw: str) -> Decision:
             actions.append(Action(kind, text=item.get("text")))
     result = tuple(actions)
     validate_actions(result)
-    return Decision(payload["decision_summary"], result)
+    return Decision(payload.get("decision_summary"), result)
 
 
 def parse_response(raw: str) -> tuple[Action, ...]:
