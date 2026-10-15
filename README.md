@@ -4,7 +4,7 @@
 
 模型负责交流与决策，Python 裁判负责规则、信息隔离和胜负判定。项目用于观察模型在不同规则和提示词下的博弈行为，不预设模型必须聊天，也不把单场胜负当作模型能力排名。
 
-当前代码版本为 **0.2.0**，支持 GPT 与 DeepSeek 参数方案的 Chat Completions 兼容接口。默认同时行动、首次出拳锁定，另有允许改拳的对照模式和实验性轮流行动模式。当前使用非流式请求，流式输出计划在后续版本加入。
+当前代码版本为 **0.2.0**，支持 GPT 与 DeepSeek 参数方案的 Chat Completions 兼容接口。默认同时行动、首次出拳锁定，另有允许改拳的对照模式和实验性轮流行动模式。当前使用非流式请求。
 
 ## 功能
 
@@ -53,19 +53,21 @@ python3 -m venv .venv
 
 这会运行无需密钥、不会调用模型的 BO3，展示聊天、出拳、比分和预设复盘，并打印本次日志目录。模拟玩家使用固定脚本，不能代表真实模型表现。
 
-### 3. 配置真实模型
+### 3. 手动创建 config.toml 并配置真实模型
 
-首次创建配置文件：
+**程序首次运行不会自动创建 `config.toml`。仓库只提供 `config.example.toml` 模板；首次使用真实模型前，需要在项目根目录复制模板，新建自己的 `config.toml`。** 上一步的模拟比赛不需要配置文件。
+
+如果已经有 `config.toml`，直接编辑现有文件，不要再次复制覆盖。首次创建时执行：
 
 ```powershell
 Copy-Item config.example.toml config.toml
 ```
 
-macOS / Linux 使用 `cp config.example.toml config.toml`。**已有 `config.toml` 时直接编辑，避免覆盖自己的配置。**
+macOS / Linux 使用 `cp config.example.toml config.toml`。也可以在文件管理器中复制模板并重命名为 `config.toml`；确认文件名不是 `config.toml.txt`。
 
-用文本编辑器打开 `config.toml`，分别检查 `[players.gpt]` 和 `[players.deepseek]`：
+用文本编辑器打开新建的 `config.toml`，填写双方密钥，并按实际服务修改以下字段。仅复制模板仍无法运行真实比赛，因为模板中的密钥为空。
 
-| 字段 | 填写内容 |
+| `[players.gpt]` 与 `[players.deepseek]` 下的字段 | 填写内容 |
 | --- | --- |
 | `api_key` | 对应服务提供的密钥，两方都需填写 |
 | `base_url` | API 基础地址，不包含末尾的 `/chat/completions` |
@@ -80,10 +82,10 @@ macOS / Linux 使用 `cp config.example.toml config.toml`。**已有 `config.tom
 ### 4. 运行真实 BO3
 
 ```powershell
-.\.venv\Scripts\python.exe -m model_rps --bo 3
+.\.venv\Scripts\python.exe -m model_rps --config config.toml --mode live --bo 3
 ```
 
-默认模式为 `live`，此命令会发起真实 API 请求，费用由所用服务计收。`--bo 3` 临时覆盖模板中的 BO9。不加参数运行会使用配置文件里的比赛设置。正常结束后自动请求双方复盘；按 `Ctrl+C` 可以中止，已经写入的日志会保留。
+此命令明确读取刚创建的配置并运行真实 BO3，会发起 API 请求，费用由所用服务计收。显式指定配置可以在文件缺失时直接报错。之后在项目根目录不加参数运行，会使用 `config.toml` 中的比赛设置。正常结束后自动请求双方复盘；按 `Ctrl+C` 可以中止，已经写入的日志会保留。
 
 ## 配置与常用命令
 
@@ -99,7 +101,7 @@ macOS / Linux 使用 `cp config.example.toml config.toml`。**已有 `config.tom
 | `[match]` | `initiative` | simultaneous 同时行动 / alternating 轮流行动 |
 | `[players.gpt]`、`[players.deepseek]` | `model`、`base_url`、`api_key`、`thinking`、`name` | 双方模型与身份设置 |
 
-内置默认值为真实模式、BO1、同时行动、锁定出拳、双方思考 `off`、60 秒超时、1 秒重试间隔和 20,000 token 输出上限。模板覆盖部分设置：BO9、双方思考 `high`、120 秒超时。模板 GPT 模型为 `gpt-5.6-sol`，内置 GPT 模型为 `gpt-6-luna`；均可自行修改。
+内置默认值为真实模式、BO1、同时行动、锁定出拳、双方思考 `off`、60 秒超时、1 秒重试间隔和 20,000 token 输出上限。模板覆盖部分设置：BO9、双方思考 `high`、120 秒超时。模型与服务地址以你填写的配置为准。
 
 省略 `max_games` 时，上限按**最终生效的 BO × 10** 计算；显式设置时不得小于目标胜局数。配置中的相对日志路径基于配置文件所在目录，命令行 `--log-dir` 则基于当前工作目录。
 
@@ -119,7 +121,7 @@ macOS / Linux 使用 `cp config.example.toml config.toml`。**已有 `config.tom
 
 `--config` 与 `--no-config` 互斥。显式指定的配置不存在、TOML 格式错误或包含非法参数时，程序会在请求前报错。运行模拟比赛建议使用 `--no-config --mode demo`，以免读入真实配置中的思考设置；模拟模式要求双方思考为 `off`。
 
-旧版 `local_secrets.py` 仍兼容：仅当 TOML 中双方都没有 `api_key` 字段时，回退读取其中的 `OPENAI_API_KEY` 和 `DEEPSEEK_API_KEY` 字符串常量。显式 `--secrets-file` 可覆盖双方密钥。首次使用建议直接采用 TOML。
+未显式指定配置且当前目录没有 `config.toml` 时，程序使用内置默认值，不会生成文件。真实模式在没有 TOML 密钥时仍有旧版密钥文件回退逻辑；新用户若遇到 `local_secrets.py` 缺失提示，应按快速开始创建并填写 `config.toml`。
 
 ## 比赛规则
 
@@ -162,8 +164,6 @@ macOS / Linux 使用 `cp config.example.toml config.toml`。**已有 `config.tom
 .\.venv\Scripts\python.exe -m model_rps --initiative alternating --move-policy locked --bo 3
 ```
 
-该模式已有模拟与自动化验证，仍需通过更多真实模型比赛观察行为。
-
 ## 思考、分析与赛后复盘
 
 双方独立设置思考级别，同一场 BO 的对局与复盘共用设置：
@@ -175,7 +175,7 @@ macOS / Linux 使用 `cp config.example.toml config.toml`。**已有 `config.tom
 
 这些是本项目适配器接受的选项，不代表所有模型和兼容服务都支持。接口拒绝参数时明确报错，不自动降级。仅更换 `model` 不会改变该席位的请求参数方案，接入不兼容模型需要调整适配器。
 
-模型可以提供正文策略分析，字段名为 `decision_summary`；当前响应实际返回非空 `reasoning_content` 或 `reasoning` 时，可省略正文分析。仅开启思考或返回思考 token 数不足以替代正文分析。无论是否提供思考文本，动作 JSON 都必须完整有效。
+模型必须提供非空的正文策略分析，字段名为 `decision_summary`；只有当前响应实际返回非空 `reasoning_content` 或 `reasoning` 时，才可省略正文分析。仅开启思考或返回思考 token 数不足以替代正文分析。无论是否提供思考文本，动作 JSON 都必须完整有效。
 
 - **正文策略分析**：比赛期间仅保留在该玩家自己的历史与私有日志中，整场 BO 结束后公开。
 - **接口思考文本**：只写入该玩家私有日志，不发送给对手、不回填后续请求，也不纳入公开复盘材料。
@@ -214,7 +214,8 @@ logs/日期时间_唯一编号/
 | 情况 | 处理方式 |
 | --- | --- |
 | `No module named model_rps` | 在项目根目录，用同一个虚拟环境的 Python 执行 `-m pip install -e .` |
-| 找不到配置或密钥为空 | 检查当前目录的 `config.toml`，或用 `--config` 指定路径；填写双方密钥 |
+| 首次运行后没有 `config.toml` | 程序不会自动生成；复制 `config.example.toml` 为 `config.toml`，再填写双方密钥 |
+| 找不到配置或密钥为空 | 确认文件已保存、名称不是 `config.toml.txt`，并在项目根目录运行，或用 `--config` 指定路径 |
 | HTTP 401 | 核对密钥是否属于当前 `base_url` 对应的服务 |
 | 模型或参数不支持 | 核对服务支持的模型标识、思考档位、JSON 输出和输出上限 |
 | 请求超时或 JSON 被截断 | 查看私有 `debug.log`，结合服务限制调整超时、思考级别及输出上限 |
