@@ -93,8 +93,12 @@ class RunLogs:
             return label + "\n" + "\n".join("    " + line for line in readable(value).split("\n"))
 
         kind = record["kind"]
-        phase = "赛后复盘" if record.get("phase") == "review" else f"第 {record['game']} 局 · Tick {record['tick']}"
-        title = {"reasoning": "接口思考", "decision": "策略分析与行动", "review": "复盘结果",
+        phase = "赛后聊天" if record.get("phase") == "postmatch" else f"第 {record['game']} 局 · Tick {record['tick']}"
+        if record.get("phase") == "chat":
+            phase += " · 聊天"
+        if record.get("request_id") is not None:
+            phase += f" · 响应 #{record['request_id']}"
+        title = {"reasoning": "接口思考", "decision": "策略分析与行动", "postmatch_response": "赛后响应",
                  "request_end": "请求未完成"}[kind]
         timestamp = datetime.now().astimezone().isoformat(timespec="seconds")
         lines = ["═" * 60, f"{phase} · 第 {record['attempt']} 次请求 · {title}",
@@ -110,7 +114,7 @@ class RunLogs:
                 lines.append('思考内容：见上方逐步写入的流式记录。')
             elif record.get("content"):
                 lines.append(paragraph("思考内容：", record["content"]))
-            lines.append("注：收到思考文本不代表最终动作或复盘通过校验。")
+            lines.append("注：收到思考文本不代表最终动作或发言通过校验。")
         elif kind == "decision":
             lines.append("状态：通过校验；动作是否执行以 chat.log 的裁判记录为准。")
             source = "ANALYZE" if record.get("summary") is not None else "未提交"
@@ -130,12 +134,16 @@ class RunLogs:
                     lines.append(f"  {index}. ENDTURN · 未出拳，结束本次行动")
             for action in record.get("ignored_actions", ()):
                 lines.append(f"忽略的 MOVE：{gestures[action['move']]}（{action['move']}）；原拳型已锁定，不作修改。")
-        elif kind == "review":
-            lines.append("状态：复盘完成")
-            lines.append(paragraph("复盘：", record["review"]["text"]))
+        elif kind == "postmatch_response":
+            lines.append("状态：通过校验；是否公开以 chat.log 为准。")
+            for message in record["messages"]:
+                lines.append(paragraph("拟发送发言：", message))
+            if record["exit"]:
+                lines.append("拟执行：EXIT · 退出赛后聊天。")
         else:
             status = "已取消" if record.get("status") == "cancelled" else "请求失败或响应无效"
-            lines.append(f"状态：{status}；本次未取得有效{'复盘' if record.get('phase') == 'review' else '动作'}。")
+            subject = {'postmatch': '赛后响应', 'chat': '聊天响应'}.get(record.get('phase'), '行动或聊天响应')
+            lines.append(f"状态：{status}；本次未取得有效{subject}。")
             if record.get("error"):
                 lines.append(paragraph("原因：", record["error"]))
             if record.get("correction"):
@@ -154,16 +162,17 @@ class RunLogs:
             self._finish_stream(entry)
         self._json((player, "debug"), entry)
         if record['kind'] == 'stream_end':
-            status = '接收完整；仍须通过 JSON 与动作/复盘校验。' if record['status'] == 'complete' else '接收未完成；本次片段不作为有效动作或复盘。'
+            status = '接收完整；仍须通过 JSON 与指令校验。' if record['status'] == 'complete' else '接收未完成；本次片段不作为有效指令。'
             self._write((player, 'thought'), f'流式接收结束：{status}\n')
-        if record["kind"] in ("reasoning", "decision", "review") or (
+        if record["kind"] in ("reasoning", "decision", "postmatch_response") or (
             record["kind"] == "request_end" and record["status"] != "valid"
         ):
             self._thought(player, entry)
 
     @staticmethod
     def _stream_key(entry):
-        return (entry['game'], entry['player'], entry.get('phase', 'game'), entry['tick'], entry['attempt'])
+        return (entry['game'], entry['player'], entry.get('phase', 'game'), entry['tick'],
+                entry.get('request_id'), entry['attempt'])
 
     def _stream_delta(self, entry):
         key = (*self._stream_key(entry), entry['field'])
@@ -195,7 +204,11 @@ class RunLogs:
         if layout is None or layout['identity'] != identity:
             if layout is not None:
                 self._fragment((player, 'thought'), '\n')
-            phase = '赛后复盘' if entry.get('phase') == 'review' else f"第 {entry['game']} 局 · Tick {entry['tick']}"
+            phase = '赛后聊天' if entry.get('phase') == 'postmatch' else f"第 {entry['game']} 局 · Tick {entry['tick']}"
+            if entry.get('phase') == 'chat':
+                phase += ' · 聊天'
+            if entry.get('request_id') is not None:
+                phase += f" · 响应 #{entry['request_id']}"
             timestamp = datetime.now().astimezone().isoformat(timespec='seconds')
             name = self.redact(self.names[player] if self.names else player)
             name = ''.join(f'\\u{ord(c):04x}' if unicodedata.category(c).startswith('C') else c for c in name)

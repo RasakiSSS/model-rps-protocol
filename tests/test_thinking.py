@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 import httpx
 
-from fixtures import review_payload, turn_payload
+from fixtures import postmatch_payload, turn_payload
 from model_rps.commands import parse_decision, AnalysisPolicy
 from model_rps.cli import make_parser, play
 from model_rps.diagnostics import LogError, request_trace
@@ -22,7 +22,7 @@ from model_rps.players import (ChatCompletionPlayer, DEEPSEEK, OPENAI, DEEPSEEK_
 from model_rps.runner import RequestPolicy, run_game
 
 FAST = RequestPolicy(timeout=1, retry_delay=0)
-REVIEW = json.dumps(review_payload("\n\n".join(["评价", "关键局", "改进"])))
+POSTMATCH = json.dumps(postmatch_payload("\n\n".join(["评价", "关键局", "改进"])))
 
 
 def decision(move="Paper", summary="简短说明"):
@@ -65,7 +65,7 @@ class ThinkingTests(unittest.IsolatedAsyncioTestCase):
         def handler(request):
             body = json.loads(request.content)
             bodies.append(body)
-            return completion(REVIEW if json.loads(body["messages"][-1]["content"]).get("phase") == "review" else decision())
+            return completion(POSTMATCH if json.loads(body["messages"][-1]["content"]).get("phase") == "postmatch" else decision())
 
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
             for spec, modes in ((DEEPSEEK, DEEPSEEK_THINKING_MODES), (OPENAI, OPENAI_THINKING_MODES)):
@@ -73,7 +73,7 @@ class ThinkingTests(unittest.IsolatedAsyncioTestCase):
                     for rule in MovePolicy:
                         player = ChatCompletionPlayer(client, configure_thinking(spec, mode), "test-key")
                         await player.respond(GameState(move_policy=rule).view_for("A"))
-                        await player.review({"player": "A", "match": {"move_policy": rule.value}})
+                        await player.postmatch({"player": "A", "match": {"move_policy": rule.value}})
                         self.assertEqual(bodies[-2]["messages"][0]["content"], game_prompt(rule))
                         for body in bodies[-2:]:
                             self.assertEqual(body[spec.token_parameter], 20000)
@@ -83,7 +83,7 @@ class ThinkingTests(unittest.IsolatedAsyncioTestCase):
                             self.assertNotIn("temperature", body)
                             self.assertNotIn("tools", body)
 
-    async def test_cli_independent_switches_and_private_reasoning_across_bo_and_review(self):
+    async def test_cli_independent_switches_and_private_reasoning_across_bo_and_postmatch(self):
         for a_mode, b_mode in (("off", "off"), ("medium", "off"), ("off", "high"), ("medium", "high")):
             bodies = []
 
@@ -99,10 +99,10 @@ class ThinkingTests(unittest.IsolatedAsyncioTestCase):
                                  "Bearer test-key-b" if player == "A" else "Bearer test-key-a")
                 self.assertEqual(ctx.get("player", ctx.get("state", {}).get("player")), ("Red · " if player == "A" else "Blue · ") + spec.model)
                 self.assertNotIn("NATIVE-", json.dumps(body))
-                if json.loads(body["messages"][-1]["content"]).get("phase") == "review":
+                if json.loads(body["messages"][-1]["content"]).get("phase") == "postmatch":
                     self.assertEqual(len(bodies), 5 if player == "A" else 6)
                     self.assertEqual(ctx["match"]["result"]["wins"], {"Red · " + OPENAI.model: 2, "Blue · " + DEEPSEEK.model: 0})
-                    content = REVIEW
+                    content = POSTMATCH
                 else:
                     if ctx["match"]["game"] == 2:
                         self.assertGreater(len(body["messages"]), 2)
@@ -129,7 +129,7 @@ class ThinkingTests(unittest.IsolatedAsyncioTestCase):
                     rows = [json.loads(s) for s in (root / f"{directory}/debug.log").read_text(encoding="utf-8").splitlines()]
                     readable = (root / f"{directory}/thought.log").read_text(encoding="utf-8")
                     self.assertEqual("NATIVE-" in readable, mode != "off")
-                    self.assertIn("赛后复盘", readable)
+                    self.assertIn("赛后聊天", readable)
                     native = [r for r in rows if r["kind"] == "reasoning"]
                     decisions = [r for r in rows if r["kind"] == "decision"]
                     self.assertEqual(len(decisions), 2)
@@ -139,7 +139,7 @@ class ThinkingTests(unittest.IsolatedAsyncioTestCase):
                     self.assertTrue(all(r["has_reasoning"] == (mode != "off") for r in decisions))
                     self.assertEqual(len(native), 0 if mode == "off" else 3)
                     if native:
-                        self.assertEqual([r["phase"] for r in native], ["game", "game", "review"])
+                        self.assertEqual([r["phase"] for r in native], ["game", "game", "postmatch"])
                         self.assertTrue(all(r["status"] == "returned" and "[REDACTED]" in r["content"] for r in native))
                     debug = [json.loads(s) for s in (root / f"{directory}/debug.log").read_text(encoding="utf-8").splitlines()]
                     self.assertEqual(next(r for r in debug if r["kind"] == "match_start")["thinking"], {"Red · " + OPENAI.model: a_mode, "Blue · " + DEEPSEEK.model: b_mode})

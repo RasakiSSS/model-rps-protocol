@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 import httpx
 
-from fixtures import review_payload, turn_payload
+from fixtures import postmatch_payload, turn_payload
 from model_rps.commands import parse_response
 from model_rps.cli import main, make_parser
 from model_rps.game import Action, ActionKind, EndReason, GameState, Gesture, InvalidResponse, MovePolicy, advance, judge
@@ -93,7 +93,7 @@ class LockedRulesTests(unittest.TestCase):
                 root, = Path(directory).iterdir()
                 rows = [json.loads(s) for s in (root / "red/debug.log").read_text(encoding="utf-8").splitlines()]
                 self.assertEqual(next(r for r in rows if r["kind"] == "game_end")["completed_ticks"], expected_tick)
-                self.assertTrue(next(r for r in rows if r["kind"] == "review_end")["complete"])
+                self.assertTrue(next(r for r in rows if r["kind"] == "postmatch_end")["complete"])
         with tempfile.TemporaryDirectory() as directory, contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(main(["--no-config", "--mode", "demo", "--scenario", "change", "--log-dir", directory]), 2)
             self.assertEqual(list(Path(directory).iterdir()), [])
@@ -160,17 +160,17 @@ class LockedFlowTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(bodies[0]["messages"]), 2)
             self.assertEqual(bodies[0]["messages"][0]["content"], game_prompt(MovePolicy.REVISABLE))
 
-    async def test_live_cli_routes_locked_rules_to_play_reviews_and_logs(self):
-        reviews = []
+    async def test_live_cli_routes_locked_rules_to_play_postmatchs_and_logs(self):
+        postmatchs = []
 
         def handler(request):
             body = json.loads(request.content)
             ctx = json.loads(body["messages"][-1]["content"])
-            if json.loads(body["messages"][-1]["content"]).get("phase") == "review":
-                reviews.append(ctx)
+            if json.loads(body["messages"][-1]["content"]).get("phase") == "postmatch":
+                postmatchs.append(ctx)
                 self.assertEqual(ctx["match"]["move_policy"], "locked")
                 self.assertEqual(len(ctx["match"]["games"][0]["decisions"]), 2)
-                content = json.dumps(review_payload("\n\n".join(["完成", "第1局Tick1", "观察更多场次"])))
+                content = json.dumps(postmatch_payload("\n\n".join(["完成", "第1局Tick1", "观察更多场次"])))
             else:
                 self.assertEqual(body["messages"][0]["content"], game_prompt(MovePolicy.LOCKED))
                 content = move("Paper" if body["model"] == DEEPSEEK.model else "Rock")
@@ -184,7 +184,7 @@ class LockedFlowTests(unittest.IsolatedAsyncioTestCase):
             args = make_parser().parse_args(["--secrets-file", str(path / "keys.py"), "--log-dir", str(path / "logs")])
             with patch("model_rps.cli.httpx.AsyncClient", return_value=client), contextlib.redirect_stdout(io.StringIO()) as output:
                 self.assertEqual(await play(args), 0)
-            self.assertEqual(len(reviews), 2)
+            self.assertEqual(len(postmatchs), 2)
             self.assertNotIn("结算 Tick", output.getvalue())
             root, = (path / "logs").iterdir()
             rows = [json.loads(s) for s in (root / "red/debug.log").read_text(encoding="utf-8").splitlines()]

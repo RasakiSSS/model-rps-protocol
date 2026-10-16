@@ -14,9 +14,10 @@ import httpx
 
 from .game import MAX_TICKS, PlayerView
 from .commands import AnalysisPolicy
+from .context_usage import ContextUsage
 from .diagnostics import trace
 from .identities import named_data
-from .prompts import REVIEW_PROMPT, game_prompt
+from .prompts import POSTMATCH_PROMPT, game_prompt
 from .streaming import CompletionStream, StreamError, sse_data
 
 MAX_OUTPUT_TOKENS = 20000
@@ -35,6 +36,14 @@ class ModelResponse:
 class Player(Protocol):
     analysis_policy: AnalysisPolicy
 
+    def checkpoint_history(self):
+        """可选的历史事务接口：有历史的适配器提供检查点，供取消时回退。"""
+        ...
+
+    def restore_history(self, checkpoint) -> None:
+        """删除未应用请求产生的私有历史；不删除诊断日志或用量。"""
+        ...
+
     async def respond(self, view: PlayerView, feedback: str | None = None) -> str | ModelResponse:
         """返回待校验的 JSON 正文，可附带适配器确认的思考可用性。"""
         ...
@@ -45,8 +54,8 @@ class MatchPlayer(Player, Protocol):
         """新比赛开始时清空该玩家的上下文。"""
         ...
 
-    async def review(self, context: dict, feedback: str | None = None) -> str:
-        """整场比赛结束后，根据公开的完整记录生成复盘。"""
+    async def postmatch(self, context: dict, feedback: str | None = None) -> str:
+        """延续本场上下文，返回赛后发言或退出指令。"""
         ...
 
     def start_game(self, context: dict) -> None:
@@ -135,6 +144,14 @@ class ChatCompletionPlayer:
     def start_match(self) -> None:
         self._messages = [{"role": "system", "content": game_prompt("locked", analysis=self.analysis_policy)}]
         self._match_context = None
+        self._context_usage = ContextUsage()
+        self._usage = None
+
+    def checkpoint_history(self) -> int:
+        return len(self._messages)
+
+    def restore_history(self, checkpoint: int) -> None:
+        del self._messages[checkpoint:]
 
     def start_game(self, context: dict) -> None:
         # 每个玩家持有独立副本，不能通过共享可变字典影响对手视图。
@@ -142,7 +159,7 @@ class ChatCompletionPlayer:
 
     async def respond(self, view: PlayerView, feedback: str | None = None) -> ModelResponse:
         self._messages[0] = {"role": "system", "content": game_prompt(view.move_policy, view.initiative, self.analysis_policy)}
-        context = {"phase": "game", "state": view.to_dict(), "correction": feedback}
+        context = {"phase": "game" if view.can_act else "chat", "state": view.to_dict(), "correction": feedback}
         if self._match_context is not None:
             context["match"] = self._match_context
         user_message = {"role": "user", "content": json.dumps(named_data(context, self.names), ensure_ascii=False)}
@@ -152,16 +169,23 @@ class ChatCompletionPlayer:
         self._messages.extend([user_message, {"role": "assistant", "content": response.content}])
         return response
 
-    async def review(self, context: dict, feedback: str | None = None) -> str:
-        # 延续本席位的比赛历史，只追加双方相同的赛后公开记录和复盘邀请。
+    async def postmatch(self, context: dict, feedback: str | None = None) -> str:
+        # 首次邀请含双方相同的公开记录，后续只追加新聊天事件。
         user_message = {"role": "user", "content": json.dumps(named_data(
-            {**context, "phase": "review", "request": REVIEW_PROMPT, "correction": feedback},
+            {**context, "phase": "postmatch", "request": POSTMATCH_PROMPT, "correction": feedback},
             self.names), ensure_ascii=False)}
         response = await self._complete([*self._messages, user_message])
         self._messages.extend([user_message, {"role": "assistant", "content": response.content}])
         return response.content
 
     async def _complete(self, messages: list[dict]) -> ModelResponse:
+        self._usage = None
+        try:
+            return await self._send(messages)
+        finally:
+            trace("context_usage", **self._context_usage.record(self._usage, messages))
+
+    async def _send(self, messages: list[dict]) -> ModelResponse:
         payload = {
             **self.spec.extra_body,
             "model": self.spec.model,
@@ -239,12 +263,14 @@ class ChatCompletionPlayer:
             status = 'cancelled'
             raise
         finally:
+            self._usage = assembled.usage
             trace('stream_end', status=status, chunks=assembled.chunks, message=assembled.message,
                   usage=assembled.usage, finish_reason=assembled.finish_reason, done=assembled.done)
 
     def _parse_completion(self, data: object) -> ModelResponse:
         try:
             usage = data.get("usage") if isinstance(data, dict) else None
+            self._usage = usage
             trace("usage", usage=usage)
             choice = data["choices"][0]
             message = choice["message"]
@@ -288,51 +314,62 @@ class ScriptedPlayer:
     """按请求次数消耗预设响应；耗尽后结束行动并等待，适合演示和异常测试。"""
 
     def __init__(self, responses: list[str | Exception] | None = None, *, repeat_per_game: bool = False,
-                 analysis: AnalysisPolicy = AnalysisPolicy.REQUIRED) -> None:
+                 analysis: AnalysisPolicy = AnalysisPolicy.REQUIRED,
+                 chat_responses: list[str | Exception] | None = None) -> None:
         self._initial_responses = tuple(responses or [])
+        self._initial_chat_responses = tuple(chat_responses or [])
         self.repeat_per_game = repeat_per_game
         self.analysis_policy = AnalysisPolicy(analysis)
         self.start_match()
 
     def start_match(self) -> None:
         self.responses = deque(self._initial_responses)
+        self.chat_responses = deque(self._initial_chat_responses)
         self.requests: list[tuple[PlayerView, str | None]] = []
+        self.chat_requests: list[tuple[PlayerView, str | None]] = []
         self.game_contexts: list[dict] = []
 
     def start_game(self, context: dict) -> None:
         self.game_contexts.append(json.loads(json.dumps(context, ensure_ascii=False)))
         if self.repeat_per_game:
             self.responses = deque(self._initial_responses)
+            self.chat_responses = deque(self._initial_chat_responses)
 
     async def respond(self, view: PlayerView, feedback: str | None = None) -> str:
-        self.requests.append((view, feedback))
-        fallback = '{"actions":[{"type":"ENDTURN"}]}' if self.analysis_policy == AnalysisPolicy.OFF else WAIT_RESPONSE
-        response = self.responses.popleft() if self.responses else fallback
+        if view.can_act:
+            self.requests.append((view, feedback))
+            fallback = '{"actions":[{"type":"ENDTURN"}]}' if self.analysis_policy == AnalysisPolicy.OFF else WAIT_RESPONSE
+            response = self.responses.popleft() if self.responses else fallback
+        else:
+            self.chat_requests.append((view, feedback))
+            response = self.chat_responses.popleft() if self.chat_responses else '{"actions":[]}'
         if isinstance(response, Exception):
             raise response
         return response
 
-    async def review(self, context: dict, feedback: str | None = None) -> str:
-        report = context["match"]
-        result = report["result"]
-        last = report["games"][-1]
-        text = (f"模拟复盘：本场完成 {result['games_played']} 局，比分 Red {result['wins']['A']} : {result['wins']['B']} Blue，平局 {result['draws']} 局。\n\n"
-                f"第 {last['game']} 局在第 {last['completed_ticks']} Tick 结束，原因是 {last['result']['reason']}；本场出拳规则为 {report['move_policy']}。\n\n"
-                "这些动作来自预设模拟脚本，可对照公开记录检查行动与结算时机。")
-        return json.dumps({"actions": [{"type": "REVIEW", "text": text}]}, ensure_ascii=False)
+    async def postmatch(self, context: dict, feedback: str | None = None) -> str:
+        if "match" in context:
+            result = context["match"]["result"]
+            text = (f"本场完成 {result['games_played']} 局，比分 Red {result['wins']['A']} : "
+                    f"{result['wins']['B']} Blue。这些出拳来自模拟脚本，你怎么看？")
+            actions = [{"type": "SAY", "text": text}]
+        else:
+            actions = [{"type": "SAY", "text": "可以对照公开记录检查行动和结算时机。下次再聊！"},
+                       {"type": "EXIT"}]
+        return json.dumps({"actions": actions}, ensure_ascii=False)
 
 
 def demo_players(scenario: str, *, analysis=(AnalysisPolicy.REQUIRED, AnalysisPolicy.REQUIRED)) -> tuple[ScriptedPlayer, ScriptedPlayer]:
     policies = iter(analysis)
 
-    def scripted(responses=None):
+    def scripted(responses=None, *, chat_responses=None):
         policy = AnalysisPolicy(next(policies))
         if policy == AnalysisPolicy.OFF and responses:
             # 演示脚本遵守配置，真实模型的违规分析仍由通用校验器拒绝。
             responses = [json.dumps({"actions": [c for c in json.loads(raw)["actions"]
                                                  if c["type"] != "ANALYZE"]}, ensure_ascii=False)
                          for raw in responses]
-        return ScriptedPlayer(responses, repeat_per_game=True, analysis=policy)
+        return ScriptedPlayer(responses, repeat_per_game=True, analysis=policy, chat_responses=chat_responses)
 
     def response(*actions: dict) -> str:
         return json.dumps({"actions": [{"type": "ANALYZE", "text": "执行当前模拟场景的预设动作。"},
@@ -340,6 +377,10 @@ def demo_players(scenario: str, *, analysis=(AnalysisPolicy.REQUIRED, AnalysisPo
 
     rock = response({"type": "MOVE", "move": "Rock"})
     scissors = response({"type": "MOVE", "move": "Scissors"})
+    if scenario == "chat":
+        hello = json.dumps({"actions": [{"type": "SAY", "text": "先聊一句，这条消息不结束我的行动。"}]}, ensure_ascii=False)
+        reply = json.dumps({"actions": [{"type": "SAY", "text": "现在不是我的行动机会，也可以先聊一句。"}]}, ensure_ascii=False)
+        return scripted([hello, rock]), scripted([scissors], chat_responses=[reply])
     if scenario == "locked":
         return (scripted([rock, response({"type": "SAY", "text": "我已经提交，继续等你决定。"})]),
                 scripted([response({"type": "SAY", "text": "我先考虑一下。"}), scissors]))

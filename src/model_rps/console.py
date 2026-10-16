@@ -54,8 +54,8 @@ class Console:
             self.write(f"System：{name} {action}。")
         elif event.kind == "wait":
             self.write(f"System：{name} 本 Tick 选择等待。")
-        # reveal 仍在裁判事件与复盘数据中；终端和 chat.log 由 result 统一展示。
-        elif event.kind in ("retry", "error"):
+        # reveal 仍在裁判事件与赛后公开数据中；终端和 chat.log 由 result 统一展示。
+        elif event.kind in ("retry", "error", "chat_error"):
             self.write(f"System：{name}，{display_text(event.text)}")
         elif event.kind in ("reminder", "settlement_pending"):
             self.write(f"System：{event.text}")

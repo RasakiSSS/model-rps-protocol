@@ -94,7 +94,7 @@ class DebugConsoleTests(unittest.TestCase):
                 console = Console(logs.names, logs, color=False)
                 console.event(Event(2, 'tick'))
                 for player in ('A', 'B'):
-                    base = {'player': player, 'tick': 2, 'attempt': 1, 'phase': 'review'}
+                    base = {'player': player, 'tick': 2, 'attempt': 1, 'phase': 'postmatch'}
                     logs.request(0, {**base, 'kind': 'stream_status', 'status': 'thinking'})
                     logs.request(0, {**base, 'kind': 'raw_response', 'content': 'PRIVATE-THOUGHT'})
                     logs.request(0, {**base, 'kind': 'usage', 'usage': {'prompt_tokens': 55, 'note': 'secret-key'}})
@@ -102,7 +102,7 @@ class DebugConsoleTests(unittest.TestCase):
             with contextlib.redirect_stdout(io.StringIO()) as output:
                 watch(logs.path)
             text = output.getvalue()
-            for expected in ('Red · same', 'Blue · same', 'Tick 2/20', '接收思考', '复盘', '1.23 秒', 'prompt_tokens', '[REDACTED]'):
+            for expected in ('Red · same', 'Blue · same', 'Tick 2/20', '接收思考', '赛后聊天', '1.23 秒', 'prompt_tokens', '[REDACTED]'):
                 self.assertIn(expected, text)
             self.assertNotIn('PRIVATE-THOUGHT', text)
             self.assertNotIn('secret-key', text)
@@ -124,6 +124,20 @@ class DebugConsoleTests(unittest.TestCase):
             self.assertFalse(supports_color())
         with patch.dict(os.environ, {'NO_COLOR': ''}), patch('sys.stdout.isatty', return_value=True):
             self.assertFalse(supports_color())
+
+    def test_chat_opportunity_silence_and_discard_are_distinct_in_viewer(self):
+        base = {'player': 'Blue · same', 'game': 1, 'tick': 1, 'request_id': 2, 'phase': 'chat'}
+        start = format_record({**base, 'kind': 'request_start', 'attempt': 1,
+                               'state': {'request_reasons': ['game_start', 'opponent_say']}})
+        self.assertIn('触发：开局、对手发言', start)
+        self.assertIn('聊天 · 响应 #2', start)
+        silent = format_record({**base, 'kind': 'interaction_applied', 'silent': True, 'applied_tick': 2})
+        self.assertIn('已应用：保持沉默', silent)
+        self.assertIn('应用于 Tick 2', silent)
+        self.assertIn('聊天 · 响应 #2', silent)
+        discarded = format_record({**base, 'kind': 'request_discarded', 'reason': '结算，历史已回退'})
+        self.assertIn('响应未应用：结算，历史已回退', discarded)
+        self.assertNotIn('保持沉默', discarded)
 
 
 if __name__ == '__main__':

@@ -13,10 +13,14 @@ class LogError(OSError):
 
 
 @contextmanager
-def request_trace(handler: TraceHandler | None, *, player: str, tick: int, attempt: int, phase: str = "game"):
+def request_trace(handler: TraceHandler | None, *, player: str, tick: int, attempt: int, phase: str = "game",
+                  request_id: int | None = None):
     def emit(record: dict) -> None:
         if handler is not None:
-            handler({"player": player, "tick": tick, "attempt": attempt, "phase": phase, **record})
+            identity = {"player": player, "tick": tick, "attempt": attempt, "phase": phase}
+            if request_id is not None:
+                identity["request_id"] = request_id
+            handler({**identity, **record})
 
     token = _handler.set(emit)
     try:

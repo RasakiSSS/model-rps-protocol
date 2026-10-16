@@ -157,7 +157,8 @@ class CliTests(unittest.TestCase):
                                "--log-dir", str(Path(directory) / "logs")])
             self.assertEqual(status, 1)
             self.assertIn("技术异常中止", output.getvalue())
-            self.assertNotIn("赛后", output.getvalue())
+            self.assertNotIn("赛后公开", output.getvalue())
+            self.assertNotIn("赛后聊天开始", output.getvalue())
             self.assertNotIn("test-a", output.getvalue())
             self.assertNotIn("test-b", output.getvalue())
 

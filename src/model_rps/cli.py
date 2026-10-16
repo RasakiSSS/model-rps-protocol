@@ -21,7 +21,7 @@ from .identities import player_names
 from .match import MatchConfig, MatchStatus, run_match
 from .players import MODEL_ADAPTERS, demo_players
 from .commands import AnalysisPolicy
-from .postmatch import MatchArchive, run_reviews
+from .postmatch import MatchArchive, run_postmatch
 from .runner import RequestPolicy
 
 
@@ -36,16 +36,16 @@ def make_parser(config: dict | None = None) -> argparse.ArgumentParser:
     parser.add_argument('--debug', action='store_true', help='额外打开独立调试窗口；前台与普通模式相同（Windows）')
     parser.add_argument("--move-policy", choices=tuple(MovePolicy), default=MovePolicy.LOCKED.value,
                         help="locked 提交后锁定（默认）；revisable 允许改拳，下一 Tick 结算")
-    parser.add_argument("--scenario", choices=("locked", "change", "settlement", "draw", "forfeit", "deadline", "retry"),
+    parser.add_argument("--scenario", choices=("locked", "change", "settlement", "draw", "forfeit", "deadline", "retry", "chat"),
                         help="模拟场景，默认随出拳规则选择 locked 或 change")
     parser.add_argument("--secrets-file", type=Path, help="兼容旧版：用指定 Python 文件中的两个密钥覆盖 TOML 密钥")
     parser.add_argument("--timeout", type=float, default=RequestPolicy().timeout, help="每次请求的总超时秒数")
     parser.add_argument('--stream', action=argparse.BooleanOptionalAction, default=False,
-                        help='启用流式响应；--no-stream 使用非流式（默认），对局与复盘共用')
+                        help='启用流式响应；--no-stream 使用非流式（默认），对局与赛后聊天共用')
     parser.add_argument('--stream-first-timeout', type=float, default=60, help='流式首包等待上限秒数，默认 60')
     parser.add_argument('--stream-idle-timeout', type=float, default=30, help='流式数据事件之间的等待上限秒数，默认 30')
     parser.add_argument("--retry-delay", type=float, default=1, help="真实模式重试间隔秒数，默认 1")
-    parser.add_argument("--max-output-tokens", type=int, default=20000, help="对局与复盘单次输出上限，默认 20000")
+    parser.add_argument("--max-output-tokens", type=int, default=20000, help="对局与赛后聊天单次输出上限，默认 20000")
     parser.add_argument("--initiative", choices=("simultaneous", "alternating"), default="simultaneous",
                         help="simultaneous 同时决策；alternating 实验性轮流行动，仅支持 locked")
     parser.add_argument("--bo", type=int, default=1, help="正奇数；BO N 先赢 N//2+1 局，默认 BO1")
@@ -92,11 +92,11 @@ async def play(args: argparse.Namespace) -> int:
                       f"先胜 {config.target_wins} 局；实际最多 {config.max_games} 局。")
         console.write(f"System：参赛模型：{console.names['A']} vs {console.names['B']}。")
         console.write("System：实验性 alternating：双方轮流行动，每方最多 20 次；每局交换先手。"
-                      if settings.initiative == "alternating" else "System：simultaneous：双方按同一 Tick 开始状态同时行动。")
+                      if settings.initiative == "alternating" else "System：simultaneous：双方结束行动后同步推进，聊天即时公开。")
         console.write("System：出拳规则 locked：首次提交后锁定；双方提交齐全的当前 Tick 结束时结算。"
                       if config.move_policy == MovePolicy.LOCKED else
                       "System：出拳规则 revisable：允许改拳；双方提交齐全后的下一 Tick 结算。")
-        console.write(f"System：思考设置 {console.names['A']}={thinking['A']}，{console.names['B']}={thinking['B']}（对局与复盘均适用）。")
+        console.write(f"System：思考设置 {console.names['A']}={thinking['A']}，{console.names['B']}={thinking['B']}（对局与赛后聊天均适用）。")
         logs.lifecycle("match_start", best_of=config.best_of, max_games=config.max_games,
                        target_wins=config.target_wins, players=names, mode=settings.mode,
                        timeout=policy.timeout, retry_delay=policy.retry_delay, move_policy=config.move_policy,
@@ -152,24 +152,28 @@ async def play(args: argparse.Namespace) -> int:
                     if decision["ignored_actions"]:
                         console.write(f"{label}｜锁定后忽略的 MOVE：{display_text(json.dumps(decision['ignored_actions'], ensure_ascii=False))}")
             console.game, console.tick = 0, 0
-            console.write("\nSystem：赛后复盘开始，双方各自分析完整记录。")
-            logs.lifecycle("review_start")
-            outcomes = await run_reviews(players, report, policy=policy,
-                                         on_request=lambda record: request(0, record))
-            for outcome in outcomes:
-                name = console.names[outcome.player]
-                if outcome.review is None:
-                    console.write(f"System：{name}，{display_text(outcome.error)}")
-                    continue
-                console.write(f"{name} 复盘：")
-                for line in outcome.review.text.splitlines():
-                    console.write(f"  {display_text(line)}")
-            complete = all(outcome.review is not None for outcome in outcomes)
-            logs.lifecycle("review_end", complete=complete,
-                           players={outcome.player: "complete" if outcome.review else "failed" for outcome in outcomes})
-            console.write("System：赛后复盘结束。" if complete else "System：赛后复盘部分未完成，已保存成功结果。")
-            if not complete:
+            console.write("\nSystem：赛后聊天开始，双方可自由交流；双方 EXIT 后结束。")
+            logs.lifecycle("postmatch_start")
+
+            def postmatch_event(event):
+                logs.lifecycle("postmatch_event", event=event)
+                name = console.names[event["player"]]
+                if event["kind"] == "exit":
+                    console.write(f"System：{name} 已退出赛后聊天。")
+                else:
+                    lines = event["text"].splitlines()
+                    console.write(f"{name}：{display_text(lines[0])}")
+                    for line in lines[1:]:
+                        console.write(f"  {display_text(line)}")
+
+            outcome = await run_postmatch(players, report, policy=policy,
+                                         on_request=lambda record: request(0, record), on_event=postmatch_event)
+            logs.lifecycle("postmatch_end", complete=outcome.complete, exited=outcome.exited,
+                           failed_player=outcome.failed_player, error=outcome.error)
+            if not outcome.complete:
+                console.write(f"System：{console.names[outcome.failed_player]}，{display_text(outcome.error)}")
                 return 4
+            console.write("System：双方已退出，赛后聊天结束。")
         return {MatchStatus.WON: 0, MatchStatus.UNDECIDED: 3, MatchStatus.TECHNICAL_ERROR: 1}[result.status]
 
     if settings.mode == "demo":

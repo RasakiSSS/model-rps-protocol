@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 import httpx
 
-from fixtures import review_payload, turn_payload
+from fixtures import postmatch_payload, turn_payload
 from model_rps.cli import make_parser, play
 from model_rps.identities import SEAT_DIRECTORIES, named_data, player_names
 from model_rps.logs import RunLogs
@@ -40,7 +40,7 @@ class IdentityTests(unittest.TestCase):
 
 
 class NamedCLITests(unittest.IsolatedAsyncioTestCase):
-    async def test_named_identity_survives_bo_history_review_and_logs_with_custom_models(self):
+    async def test_named_identity_survives_bo_history_postmatch_and_logs_with_custom_models(self):
         for first, second in [('gpt-6-luna', 'deepseek-flash'), ('vendor/gpt', 'vendor/deepseek'), ('same', 'same')]:
             names = player_names(first, second)
             calls = []
@@ -65,13 +65,13 @@ class NamedCLITests(unittest.IsolatedAsyncioTestCase):
                     if message['role'] == 'user':
                         check(json.loads(message['content']))
                 ctx = json.loads(body['messages'][-1]['content'])
-                if json.loads(body["messages"][-1]["content"]).get("phase") == "review":
+                if json.loads(body["messages"][-1]["content"]).get("phase") == "postmatch":
                     self.assertEqual(ctx['player'], names[slot])
                     self.assertEqual(ctx['match']['result']['wins'], {names['A']: 2, names['B']: 0})
                     for game in ctx['match']['games']:
                         self.assertEqual(game['result']['winner'], names['A'])
                         self.assertEqual({d['player'] for d in game['decisions']}, set(names.values()))
-                    content = review_payload("\n\n".join(['完成', '第一局', '继续观察']))
+                    content = postmatch_payload("\n\n".join(['完成', '第一局', '继续观察']))
                 else:
                     self.assertEqual(ctx['state']['player'], names[slot])
                     if ctx['match']['game'] == 2:

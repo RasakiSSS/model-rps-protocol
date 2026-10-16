@@ -8,13 +8,12 @@ from unittest.mock import patch
 
 import httpx
 
-from fixtures import turn_payload, review_payload
+from fixtures import turn_payload, postmatch_payload
 from model_rps.cli import main, make_parser
 from model_rps.commands import (AnalysisPolicy, CommandKind, parse_commands, parse_command_line,
-                                parse_decision, validate_decision, review_text)
+                                parse_decision, validate_decision, parse_postmatch)
 from model_rps.config import RuntimeConfig, load_config
 from model_rps.game import ActionKind, InvalidResponse
-from model_rps.postmatch import parse_review
 
 
 class CommandTests(unittest.TestCase):
@@ -27,8 +26,10 @@ class CommandTests(unittest.TestCase):
         self.assertEqual(decision.summary, '第一段\n第二段')
         self.assertEqual([a.kind for a in decision.actions], [ActionKind.SAY, ActionKind.MOVE])
         self.assertNotIn('第一段', repr(decision.actions))
-        review = parse_command_line('/review 自由复盘\n不必分成三项')
-        self.assertEqual(review_text((review,)), '自由复盘\n不必分成三项')
+        goodbye = [parse_command_line('/say 下次再玩'), parse_command_line('/exit')]
+        response = parse_postmatch(json.dumps({'actions': [c.to_dict() for c in goodbye]}))
+        self.assertEqual(response.messages, ('下次再玩',))
+        self.assertTrue(response.exit)
 
     def test_chat_does_not_implicitly_end_turn_or_require_analysis(self):
         commands = parse_commands('{"actions":[{"type":"SAY","text":"聊天"}]}')
@@ -73,21 +74,21 @@ class CommandTests(unittest.TestCase):
         for actions in ([{'type': 'ENDTURN'}, {'type': 'SAY', 'text': 'late'}],
                         [{'type': 'ENDTURN'}, {'type': 'ENDTURN'}],
                         [{'type': 'MOVE', 'move': 'Rock'}, {'type': 'MOVE', 'move': 'Paper'}],
-                        [{'type': 'REVIEW', 'text': 'early'}]):
+                        [{'type': 'EXIT'}]):
             with self.subTest(actions=actions), self.assertRaises(InvalidResponse):
                 parse_decision(json.dumps(turn_payload(actions)))
-        for kind in ('SAY', 'ANALYZE', 'MOVE', 'ENDTURN'):
+        for kind in ('ANALYZE', 'MOVE', 'ENDTURN'):
             commands = [{'type': kind, 'move': 'Rock'}] if kind == 'MOVE' else (
-                [{'type': kind}] if kind == 'ENDTURN' else [{'type': kind, 'text': 'not review'}])
+                [{'type': kind}] if kind == 'ENDTURN' else [{'type': kind, 'text': 'not postmatch'}])
             with self.subTest(kind=kind), self.assertRaises(InvalidResponse):
-                parse_review(json.dumps({'actions': commands}))
+                parse_postmatch(json.dumps({'actions': commands}))
         with self.assertRaises(InvalidResponse):
-            parse_review(json.dumps({'actions': [{'type': 'REVIEW', 'text': 'ok'}, {'type': 'ENDTURN'}]}))
-        self.assertEqual(parse_review(json.dumps(review_payload('自由复盘'))).text, '自由复盘')
+            parse_postmatch(json.dumps({'actions': [{'type': 'SAY', 'text': 'ok'}, {'type': 'ENDTURN'}]}))
+        self.assertEqual(parse_postmatch(json.dumps(postmatch_payload('自由讨论'))).messages, ('自由讨论',))
 
     def test_invalid_terminal_command_is_not_accepted(self):
         for line in ('say hello', '/wait', '/next', '/move', '/move Lizard', '/move Rock Paper',
-                     '/say', '/analyze  ', '/review', '/endturn extra', ''):
+                     '/say', '/analyze  ', '/review', '/exit extra', '/endturn extra', ''):
             with self.subTest(line=line), self.assertRaises(InvalidResponse):
                 parse_command_line(line)
 
@@ -106,7 +107,7 @@ class CommandTests(unittest.TestCase):
                     self.assertEqual(main(['--config', str(path)]), 2)
                 client.assert_not_called()
 
-    def test_per_seat_analysis_policies_reach_prompts_validation_and_reviews(self):
+    def test_per_seat_analysis_policies_reach_prompts_validation_and_postmatchs(self):
         for initiative, rule in (('simultaneous', 'locked'), ('simultaneous', 'revisable'), ('alternating', 'locked')):
             with self.subTest(initiative=initiative, rule=rule), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
@@ -115,15 +116,15 @@ class CommandTests(unittest.TestCase):
                                 f'[match]\ninitiative="{initiative}"\nmove_policy="{rule}"\n'
                                 '[players.red]\nanalysis="off"\napi_key="red-key"\n'
                                 '[players.blue]\nanalysis="optional"\napi_key="blue-key"', encoding='utf-8')
-                calls, reviews = {'Red': 0, 'Blue': 0}, {}
+                calls, postmatchs = {'Red': 0, 'Blue': 0}, {}
 
                 def handler(request):
                     body = json.loads(request.content)
                     context = json.loads(body['messages'][-1]['content'])
                     seat = context.get('player', context.get('state', {}).get('player')).split(' · ')[0]
-                    if context['phase'] == 'review':
-                        reviews[seat] = body
-                        content = review_payload('自由复盘\n保留换行')
+                    if context['phase'] == 'postmatch':
+                        postmatchs[seat] = body
+                        content = postmatch_payload('自由复盘\n保留换行')
                     else:
                         calls[seat] += 1
                         self.assertIn('关闭分析' if seat == 'Red' else '分析可选', body['messages'][0]['content'])
@@ -139,12 +140,12 @@ class CommandTests(unittest.TestCase):
                 with patch('model_rps.cli.httpx.AsyncClient', return_value=client), contextlib.redirect_stdout(io.StringIO()) as output:
                     self.assertEqual(main(['--config', str(path), '--log-dir', str(root / 'logs')]), 0)
                 self.assertEqual(calls['Red'], calls['Blue'] + 1)
-                self.assertEqual(set(reviews), {'Red', 'Blue'})
-                self.assertEqual(json.loads(reviews['Red']['messages'][-1]['content'])['match'],
-                                 json.loads(reviews['Blue']['messages'][-1]['content'])['match'])
-                self.assertIn('REJECTED-ANALYSIS', json.dumps(reviews['Red']))
-                self.assertNotIn('REJECTED-ANALYSIS', json.dumps(reviews['Blue']))
-                self.assertNotIn('NATIVE-PRIVATE', json.dumps(reviews))
+                self.assertEqual(set(postmatchs), {'Red', 'Blue'})
+                self.assertEqual(json.loads(postmatchs['Red']['messages'][-1]['content'])['match'],
+                                 json.loads(postmatchs['Blue']['messages'][-1]['content'])['match'])
+                self.assertIn('REJECTED-ANALYSIS', json.dumps(postmatchs['Red']))
+                self.assertNotIn('REJECTED-ANALYSIS', json.dumps(postmatchs['Blue']))
+                self.assertNotIn('NATIVE-PRIVATE', json.dumps(postmatchs))
                 self.assertNotIn('REJECTED-ANALYSIS', output.getvalue())
                 self.assertIn('本次未提交策略分析', output.getvalue())
                 self.assertIn('自由复盘\n  保留换行', output.getvalue())

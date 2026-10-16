@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 import httpx
 
-from fixtures import review_payload, turn_payload
+from fixtures import postmatch_payload, turn_payload
 from model_rps.cli import main, make_parser
 from model_rps.config import PlayerConfig, RuntimeConfig, load_config
 
@@ -124,7 +124,7 @@ class ConfigTests(unittest.TestCase):
     def test_sensitive_player_config_repr(self):
         self.assertNotIn('hidden-key', repr(PlayerConfig('model', 'https://example.com', 'off', api_key='hidden-key')))
 
-    def test_live_routes_config_to_requests_history_review_and_logs(self):
+    def test_live_routes_config_to_requests_history_postmatch_and_logs(self):
         for legacy_override in (False, True):
             with self.subTest(legacy_override=legacy_override), workspace() as root:
                 (root / 'config.toml').write_text('''[app]
@@ -160,9 +160,9 @@ thinking="low"
                     self.assertEqual(body['reasoning_effort'], 'high' if gpt else 'low')
                     ctx = json.loads(body['messages'][-1]['content'])
                     self.assertEqual(ctx.get('player', ctx.get('state', {}).get('player')), 'Red · GPT 显示名' if gpt else 'Blue · DeepSeek 显示名')
-                    if json.loads(body["messages"][-1]["content"]).get("phase") == "review":
+                    if json.loads(body["messages"][-1]["content"]).get("phase") == "postmatch":
                         self.assertEqual(ctx['match']['result']['wins'], {'Red · GPT 显示名': 2, 'Blue · DeepSeek 显示名': 0})
-                        content = review_payload("\n\n".join(['完成', '第二局', key]))
+                        content = postmatch_payload("\n\n".join(['完成', '第二局', key]))
                     else:
                         if ctx['match']['game'] == 2:
                             self.assertEqual(len(body['messages']), 4)

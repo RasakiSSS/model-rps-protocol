@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 import httpx
 
-from fixtures import review_payload, turn_payload
+from fixtures import postmatch_payload, turn_payload
 from model_rps.cli import make_parser, play
 from model_rps.config import RuntimeConfig, load_config
 from model_rps.diagnostics import LogError, request_trace
@@ -17,6 +17,7 @@ from model_rps.game import EndReason, GameState
 from model_rps.logs import RunLogs
 from model_rps.players import ChatCompletionPlayer, OPENAI, DEEPSEEK, PlayerError, ScriptedPlayer
 from model_rps.runner import RequestPolicy, run_game
+from model_rps.postmatch import run_postmatch
 
 
 def decision(move='Paper', summary='PRIVATE-ANALYSIS'):
@@ -66,6 +67,43 @@ def response(parts, status=200):
 
 
 class StreamingTests(unittest.IsolatedAsyncioTestCase):
+    async def test_postmatch_incomplete_exit_is_never_published_or_kept_in_history(self):
+        for recover in (True, False):
+            with self.subTest(recover=recover):
+                bodies, streams, events = [], [], []
+                attempts = {'A': 0, 'B': 0}
+
+                def handler(request):
+                    body = json.loads(request.content)
+                    bodies.append(body)
+                    identity = 'A' if body['model'] == OPENAI.model else 'B'
+                    attempts[identity] += 1
+                    self.assertNotIn('UNPUBLISHED', json.dumps(body))
+                    failed = identity == 'A' and (not recover or attempts[identity] == 1)
+                    text = json.dumps(postmatch_payload('UNPUBLISHED' if failed else '已确认的告别'))
+                    parts = complete(text, 'NATIVE-PRIVATE')
+                    stream = Bytes(parts[:-1] if failed else parts)  # 完整 JSON 和 stop 仍不能替代 DONE。
+                    streams.append(stream)
+                    return httpx.Response(200, headers={'content-type': 'text/event-stream'}, stream=stream)
+
+                async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+                    players = (ChatCompletionPlayer(client, OPENAI, 'red-key', stream=True),
+                               ChatCompletionPlayer(client, DEEPSEEK, 'blue-key', stream=True))
+                    result = await run_postmatch(players, {'games': []}, policy=RequestPolicy(1, 0),
+                                                 on_event=events.append)
+                self.assertEqual(result.complete, recover)
+                self.assertEqual(result.exited, {'A': recover, 'B': True})
+                self.assertEqual(attempts, {'A': 2 if recover else 3, 'B': 1})
+                self.assertNotIn('UNPUBLISHED', repr(events))
+                self.assertNotIn('NATIVE-PRIVATE', repr(events))
+                self.assertTrue(all(stream.closed for stream in streams))
+                a_inputs = [json.loads(b['messages'][-1]['content']) for b in bodies if b['model'] == OPENAI.model]
+                for context in a_inputs[1:]:
+                    self.assertEqual(context['events'], a_inputs[0]['events'])
+                    self.assertEqual(context['exited'], a_inputs[0]['exited'])
+                if not recover:
+                    self.assertEqual(len(players[0]._messages), 1)
+
     async def test_split_unicode_crlf_multiline_usage_and_both_adapters(self):
         for spec in (OPENAI, DEEPSEEK):
             with self.subTest(spec=spec.name):
@@ -191,6 +229,58 @@ class StreamingTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(stream.closed)
         self.assertEqual(len(player._messages), 1)
         self.assertTrue(any(r['kind'] == 'stream_end' and r['status'] == 'cancelled' for r in records))
+        usage = next(r for r in records if r['kind'] == 'context_usage')
+        self.assertIsNone(usage['input_tokens'])
+        self.assertEqual(usage['missing_usage_requests'], 1)
+
+    async def test_chat_publishes_only_after_done_and_records_usage_without_consuming_turn(self):
+        ready, release, published = asyncio.Event(), asyncio.Event(), asyncio.Event()
+        events, records, contexts = [], [], []
+        say = json.dumps({'actions': [{'type': 'SAY', 'text': '独立流式聊天'}]})
+
+        class Paused(Bytes):
+            async def __aiter__(self):
+                yield event({'content': say}, 'stop')
+                ready.set()
+                await release.wait()
+                yield b'data: {"choices":[],"usage":{"prompt_tokens":100}}\n\n'
+                yield DONE
+
+        def handler(request):
+            body = json.loads(request.content)
+            ctx = json.loads(body['messages'][-1]['content'])
+            contexts.append(ctx)
+            if len(contexts) == 1:
+                return httpx.Response(200, headers={'content-type': 'text/event-stream'}, stream=Paused([]))
+            self.assertTrue(published.is_set())
+            return response(complete(decision(), usage={'prompt_tokens': 120}))
+
+        def emit(row):
+            events.append(row)
+            if row.kind == 'say':
+                published.set()
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            player = ChatCompletionPlayer(client, OPENAI, 'secret', stream=True)
+            task = asyncio.create_task(run_game(player, ScriptedPlayer([decision('Rock')]),
+                policy=RequestPolicy(3, 0), on_event=emit, on_request=records.append))
+            try:
+                await asyncio.wait_for(ready.wait(), 1)
+                self.assertFalse(any(e.kind in ('say', 'commit', 'reveal') for e in events))
+                release.set()
+                state = await asyncio.wait_for(task, 2)
+            finally:
+                if not task.done():
+                    task.cancel()
+                    await asyncio.gather(task, return_exceptions=True)
+        self.assertEqual((state.result.winner, state.completed_ticks), ('A', 1))
+        self.assertEqual([c['state']['tick'] for c in contexts], [1, 1])
+        self.assertEqual(contexts[1]['state']['history'][0]['text'], '独立流式聊天')
+        self.assertEqual([e.text for e in events if e.kind == 'say'], ['独立流式聊天'])
+        usage = [r for r in records if r['kind'] == 'context_usage']
+        self.assertEqual([r['input_tokens'] for r in usage], [100, 120])
+        self.assertEqual(usage[-1]['input_tokens_delta'], 20)
+        self.assertEqual(usage[-1]['known_input_tokens_total'], 220)
 
     async def test_first_idle_and_total_timeouts(self):
         for name, parts in (
@@ -272,7 +362,7 @@ class StreamingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(streams), 1)
         self.assertTrue(streams[0].closed)
 
-    async def test_cli_bo_modes_review_history_and_public_privacy(self):
+    async def test_cli_bo_modes_postmatch_history_and_public_privacy(self):
         for initiative, rule in (('simultaneous', 'locked'), ('simultaneous', 'revisable'), ('alternating', 'locked')):
             with self.subTest(initiative=initiative, rule=rule), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
@@ -285,8 +375,10 @@ class StreamingTests(unittest.IsolatedAsyncioTestCase):
                     bodies.append(body)
                     self.assertTrue(body['stream'])
                     self.assertNotIn('NATIVE-PRIVATE', json.dumps(body))
-                    if json.loads(body["messages"][-1]["content"]).get("phase") == "review":
-                        content = json.dumps(review_payload("\n\n".join(['评价', '关键局', '改进'])))
+                    if json.loads(body["messages"][-1]["content"]).get("phase") == "postmatch":
+                        content = json.dumps(postmatch_payload("\n\n".join(['评价', '关键局', '改进'])))
+                    elif json.loads(body['messages'][-1]['content'])['phase'] == 'chat':
+                        content = '{"actions":[]}'
                     else:
                         content = decision('Paper' if body['model'] == OPENAI.model else 'Rock')
                         context = json.loads(body['messages'][-1]['content'])
@@ -303,7 +395,7 @@ class StreamingTests(unittest.IsolatedAsyncioTestCase):
                 output = io.StringIO()
                 with patch('model_rps.cli.httpx.AsyncClient', return_value=client), patch('model_rps.cli.open_debug_window'), contextlib.redirect_stdout(output):
                     self.assertEqual(await play(args), 0)
-                self.assertEqual(sum(json.loads(body["messages"][-1]["content"]).get("phase") == "review" for body in bodies), 2)
+                self.assertEqual(sum(json.loads(body["messages"][-1]["content"]).get("phase") == "postmatch" for body in bodies), 2)
                 self.assertNotIn('NATIVE-PRIVATE', output.getvalue())
                 self.assertNotIn('接收思考', output.getvalue())
                 self.assertNotIn('等待响应', output.getvalue())

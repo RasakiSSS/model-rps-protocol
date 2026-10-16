@@ -1,4 +1,4 @@
-"""纯游戏规则：不调用模型、不打印内容；状态更新以完整 Tick 为单位。"""
+"""纯游戏规则：不调用模型、不打印；完整 Tick 推进行动，公开聊天由调度器追加。"""
 
 from __future__ import annotations
 
@@ -115,6 +115,10 @@ class PlayerView:
     initiative: Initiative = Initiative.SIMULTANEOUS
     first_player: PlayerId = "A"
     own_turn: int = 1
+    can_act: bool = True
+    request_id: int = 0
+    notifications: tuple[int, ...] = ()
+    request_reasons: tuple[str, ...] = ()
 
     @property
     def is_settlement_tick(self) -> bool:
@@ -125,6 +129,11 @@ class PlayerView:
         turn_limit = MAX_TICKS if alternating else self.settlement_tick or MAX_TICKS
         return {
             "player": self.player,
+            "can_act": self.can_act,
+            "request_id": self.request_id,
+            "event_cursor": len(self.history),
+            "notifications": list(self.notifications),
+            "request_reasons": list(self.request_reasons),
             "initiative": self.initiative.value,
             "first_player": self.first_player if alternating else None,
             "own_turn": self.own_turn,
@@ -140,7 +149,7 @@ class PlayerView:
             "remaining_ticks_including_current": (MAX_TICKS * 2 if alternating else self.settlement_tick or MAX_TICKS) - self.tick + 1,
             "own_move": self.own_move.value if self.own_move is not None else None,
             "opponent_committed": self.opponent_committed,
-            "history": [event.to_dict() for event in self.history],
+            "history": [{"sequence": index, **event.to_dict()} for index, event in enumerate(self.history, 1)],
         }
 
 
@@ -280,6 +289,6 @@ def advance_turn(state: GameState, player: PlayerId, actions: tuple[Action, ...]
 
 
 def abort(state: GameState, player: PlayerId, message: str) -> GameState:
-    """丢弃当前 Tick 的暂存动作，只保留此前完成的状态。"""
+    """丢弃当前 Tick 未执行的行动；保留已完成状态及已经公开的聊天。"""
     event = Event(state.completed_ticks + 1, "error", player, message)
     return replace(state, events=state.events + (event,), result=Result(EndReason.TECHNICAL_ERROR))

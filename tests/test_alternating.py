@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 import httpx
 
-from fixtures import review_payload, turn_payload
+from fixtures import postmatch_payload, turn_payload
 from model_rps.commands import parse_response
 from model_rps.cli import main, make_parser, play
 from model_rps.game import (EndReason, GameState, Gesture, Initiative, InvalidResponse, MovePolicy,
@@ -170,7 +170,8 @@ class AlternatingFlowTests(unittest.IsolatedAsyncioTestCase):
         starts = []
         config = MatchConfig(3, initiative="alternating")
         result = await run_match(lambda: (a, b), config=config, policy=FAST,
-                                 on_request=lambda game, r: starts.append((game, r["player"])) if r["kind"] == "request_start" else None)
+                                 on_request=lambda game, r: starts.append((game, r["player"]))
+                                 if r["kind"] == "request_start" and r["phase"] == "game" else None)
         self.assertEqual((result.wins, result.draws, result.games_played), ((2, 0), 1, 3))
         self.assertEqual(starts, [(1, "A"), (1, "B"), (2, "B"), (2, "A"), (3, "A"), (3, "B")])
         self.assertEqual([c["first_player"] for c in a.game_contexts], ["A", "B", "A"])
@@ -179,21 +180,23 @@ class AlternatingFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(a.game_contexts), 3)
         self.assertIsNone(a.game_contexts[0]["last_game"])
 
-    async def test_live_cli_config_history_review_and_ignored_actions(self):
-        requests, reviews = [], []
+    async def test_live_cli_config_history_postmatch_and_ignored_actions(self):
+        requests, postmatchs = [], []
 
         def handler(request):
             body = json.loads(request.content)
             ctx = json.loads(body["messages"][-1]["content"])
             identity = "A" if body["model"] == OPENAI.model else "B"
-            if json.loads(body["messages"][-1]["content"]).get("phase") == "review":
-                reviews.append(ctx)
+            if json.loads(body["messages"][-1]["content"]).get("phase") == "postmatch":
+                postmatchs.append(ctx)
                 self.assertEqual(ctx["match"]["initiative"], "alternating")
                 self.assertEqual(ctx["match"]["games"][0]["first_player"], "Red · GPT 测试")
                 self.assertEqual(ctx["match"]["games"][1]["first_player"], "Blue · DeepSeek 测试")
                 self.assertEqual(ctx["match"]["games"][0]["decisions"][2]["ignored_actions"],
                                  [{"type": "MOVE", "move": "Paper"}])
-                content = json.dumps(review_payload("\n\n".join(["测试复盘", "有效动作与忽略动作分别评价", "继续观察"])))
+                content = json.dumps(postmatch_payload("\n\n".join(["测试复盘", "有效动作与忽略动作分别评价", "继续观察"])))
+            elif ctx['phase'] == 'chat':
+                content = '{"actions":[]}'
             else:
                 state = ctx["state"]
                 requests.append((ctx["match"]["game"], state["tick"], identity))
@@ -217,7 +220,7 @@ class AlternatingFlowTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(await play(args), 0)
             self.assertEqual(requests, [(1, 1, "A"), (1, 2, "B"), (1, 3, "A"), (1, 4, "B"),
                                         (2, 1, "B"), (2, 2, "A"), (2, 3, "B")])
-            self.assertEqual(len(reviews), 2)
+            self.assertEqual(len(postmatchs), 2)
             self.assertIn("本次 MOVE 无效", output.getvalue())
             run, = (root / "logs").iterdir()
             thought = (run / "red/thought.log").read_text(encoding="utf-8")

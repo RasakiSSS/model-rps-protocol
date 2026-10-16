@@ -67,16 +67,27 @@ class LogTail:
 def format_record(row: dict) -> str | None:
     """展示诊断概况；完整请求、思考和正文仍可在原始日志查看。"""
     kind = row.get("kind")
-    if kind in {"stream_delta", "raw_response", "http_request", "http_error_body", "decision", "review"}:
+    if kind in {"stream_delta", "raw_response", "http_request", "http_error_body", "decision", "postmatch_response"}:
         return None
     label = row.get("player", "System")
-    if "attempt" in row:
-        phase = "复盘" if row.get("phase") == "review" else f"第 {row.get('game')} 局 Tick {row.get('tick')}"
-        label += f" · {phase} · 第 {row['attempt']} 次请求"
+    if "attempt" in row or "request_id" in row:
+        phase = "赛后聊天" if row.get("phase") == "postmatch" else f"第 {row.get('game')} 局 Tick {row.get('tick')}"
+        if row.get("phase") == "chat":
+            phase += " · 聊天"
+        if row.get("request_id") is not None:
+            phase += f" · 响应 #{row['request_id']}"
+        label += f" · {phase}"
+        if "attempt" in row:
+            label += f" · 第 {row['attempt']} 次请求"
     if kind == "tick":
         detail = row["text"]
     elif kind == "request_start":
         detail = "等待响应"
+        reasons = row.get("state", {}).get("request_reasons", [])
+        labels = {"game_start": "开局", "turn_changed": "行动轮换", "tick_started": "新 Tick",
+                  "action_available": "行动机会", "action_ended": "自己的行动已结束", "opponent_say": "对手发言"}
+        if reasons:
+            detail += "；触发：" + "、".join(labels.get(reason, reason) for reason in reasons)
         if row.get("correction"):
             detail += "；纠错反馈：" + row["correction"]
     elif kind == "stream_status":
@@ -93,6 +104,26 @@ def format_record(row: dict) -> str | None:
         detail = f"流式接收结束：{row.get('status')}；分片 {row.get('chunks')}"
     elif kind == "reasoning":
         detail = f"思考：{row.get('status')}；token {row.get('reasoning_tokens')}"
+    elif kind == "context_usage":
+        current, delta = row.get("input_tokens"), row.get("input_tokens_delta")
+        detail = (f"输入 token：{current if current is not None else '未提供'}；"
+                  f"较上次：{format(delta, '+d') if delta is not None else '未知'}；"
+                  f"本场已知累计：{row.get('known_input_tokens_total')}；"
+                  f"用量缺失请求：{row.get('missing_usage_requests')}；消息数：{row.get('message_count')}")
+    elif kind == "interaction_applied":
+        if row.get("ended_turn"):
+            detail = "已应用：结束行动"
+        elif row.get("silent"):
+            detail = "已应用：保持沉默"
+        else:
+            detail = f"已应用：公开 {len(row.get('event_sequences', []))} 条发言"
+        detail += f"；应用于 Tick {row.get('applied_tick')}"
+    elif kind == "postmatch_applied":
+        detail = f"已公开 {len(row.get('event_sequences', []))} 条赛后事件"
+        if row.get("exit"):
+            detail += "；玩家退出"
+    elif kind == "request_discarded":
+        detail = "响应未应用：" + row.get("reason", "对局结束或取消")
     else:
         detail = f"{kind}：" + json.dumps({key: value for key, value in row.items()
                                            if key not in {"timestamp", "kind"}}, ensure_ascii=False)
