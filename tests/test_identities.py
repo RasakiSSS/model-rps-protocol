@@ -9,10 +9,10 @@ from unittest.mock import patch
 
 import httpx
 
+from fixtures import review_payload, turn_payload
 from model_rps.cli import make_parser, play
 from model_rps.identities import SEAT_DIRECTORIES, named_data, player_names
 from model_rps.logs import RunLogs
-from model_rps.players import REVIEW_PROMPT
 
 
 class IdentityTests(unittest.TestCase):
@@ -65,21 +65,20 @@ class NamedCLITests(unittest.IsolatedAsyncioTestCase):
                     if message['role'] == 'user':
                         check(json.loads(message['content']))
                 ctx = json.loads(body['messages'][-1]['content'])
-                if body['messages'][0]['content'] == REVIEW_PROMPT:
+                if json.loads(body["messages"][-1]["content"]).get("phase") == "review":
                     self.assertEqual(ctx['player'], names[slot])
                     self.assertEqual(ctx['match']['result']['wins'], {names['A']: 2, names['B']: 0})
                     for game in ctx['match']['games']:
                         self.assertEqual(game['result']['winner'], names['A'])
                         self.assertEqual({d['player'] for d in game['decisions']}, set(names.values()))
-                    content = {'assessment': '完成', 'key_moments': '第一局', 'improvements': '继续观察'}
+                    content = review_payload("\n\n".join(['完成', '第一局', '继续观察']))
                 else:
                     self.assertEqual(ctx['state']['player'], names[slot])
                     if ctx['match']['game'] == 2:
                         self.assertEqual(ctx['match']['wins'], {names['A']: 1, names['B']: 0})
                         self.assertEqual(ctx['match']['last_game']['result']['winner'], names['A'])
                         self.assertEqual(len(body['messages']), 4)
-                    content = {'decision_summary': 'A/B 是原始文字，不应改写', 'actions': [
-                        {'type': 'SAY', 'text': 'A/B'}, {'type': 'MOVE', 'move': 'Paper' if slot == 'A' else 'Rock'}]}
+                    content = turn_payload([{'type': 'SAY', 'text': 'A/B'}, {'type': 'MOVE', 'move': 'Paper' if slot == 'A' else 'Rock'}], 'A/B 是原始文字，不应改写')
                 return httpx.Response(200, json={'choices': [{'finish_reason': 'stop', 'message': {
                     'content': json.dumps(content, ensure_ascii=False)}}]})
 

@@ -1,10 +1,12 @@
 import json
 import unittest
 
+from fixtures import turn_payload
+from model_rps.commands import parse_response
 from model_rps.game import (
     MovePolicy,
     Action, ActionKind, EndReason, GameState, Gesture, InvalidResponse,
-    advance, judge, parse_response,
+    advance, judge,
 )
 
 WAIT = (Action(ActionKind.WAIT),)
@@ -43,10 +45,7 @@ class GameTests(unittest.TestCase):
         self.assertEqual(state.completed_ticks, 3)
 
     def test_all_actions_processed_before_judging(self):
-        actions = parse_response(json.dumps({"decision_summary":"测试决策说明","actions": [
-            {"type": "MOVE", "move": "Paper"},
-            {"type": "SAY", "text": "出拳之后仍可说话"},
-        ]}))
+        actions = parse_response(json.dumps(turn_payload([{"type": "MOVE", "move": "Paper"}, {"type": "SAY", "text": "出拳之后仍可说话"}], "测试决策说明")))
         state = advance(GameState(move_policy=MovePolicy.REVISABLE), move("Rock"), move("Rock"))
         state = advance(state, actions, move("Scissors"))
         self.assertEqual(state.result.winner, "B")
@@ -172,15 +171,15 @@ class GameTests(unittest.TestCase):
 
 
 class ResponseTests(unittest.TestCase):
-    def test_decision_summary_is_required_and_private(self):
-        from model_rps.game import parse_decision
+    def test_analyze_is_required_and_private(self):
+        from model_rps.commands import parse_decision
 
         for summary in (None, "", "  ", 1, []):
             with self.subTest(summary=summary), self.assertRaises(InvalidResponse):
-                parse_response(json.dumps({"decision_summary": summary, "actions": [{"type": "WAIT"}]}))
+                parse_response(json.dumps(turn_payload([], summary)))
         with self.assertRaises(InvalidResponse):
-            parse_response('{"actions":[{"type":"WAIT"}]}')
-        raw = json.dumps({"decision_summary": "private-strategy", "actions": [{"type": "WAIT"}]})
+            parse_response('{"actions":[{"type":"ENDTURN"}]}')
+        raw = json.dumps(turn_payload([], "private-strategy"))
         decision = parse_decision(raw)
         self.assertEqual(decision.summary, "private-strategy")
         state = advance(GameState(move_policy=MovePolicy.REVISABLE), decision.actions, WAIT)
@@ -188,27 +187,26 @@ class ResponseTests(unittest.TestCase):
         self.assertNotIn("private-strategy", json.dumps(state.view_for("B").to_dict()))
 
     def test_valid_multiple_actions_and_wait(self):
-        result = parse_response('{"decision_summary":"测试决策说明","actions":[{"type":"SAY","text":"你好"},'
-                                '{"type":"MOVE","move":"Rock"}]}')
+        result = parse_response('{"actions":[{"type":"ANALYZE","text":"测试决策说明"},{"type":"SAY","text":"你好"},{"type":"MOVE","move":"Rock"},{"type":"ENDTURN"}]}')
         self.assertEqual(result, (Action(ActionKind.SAY, text="你好"), *move("Rock")))
-        self.assertEqual(parse_response('{"decision_summary":"测试决策说明","actions":[{"type":"WAIT"}]}'), WAIT)
+        self.assertEqual(parse_response('{"actions":[{"type":"ANALYZE","text":"测试决策说明"},{"type":"ENDTURN"}]}'), WAIT)
 
     def test_invalid_payloads_are_rejected_as_a_whole(self):
         cases = [
             "", " ", "not JSON", "```json\n{}\n```", "[]", "null", "{}",
-            '{"decision_summary":"测试决策说明","actions":[]}', '{"decision_summary":"测试决策说明","actions":{}}', '{"decision_summary":"测试决策说明","actions":[null]}',
-            '{"decision_summary":"测试决策说明","actions":[{"type":"WAIT"}],"extra":1}',
-            '{"decision_summary":"测试决策说明","actions":[{"type":"WAIT","text":"wrong"}]}',
-            '{"decision_summary":"测试决策说明","actions":[{"type":"SAY","text":"hello"}]}',
-            '{"decision_summary":"测试决策说明","actions":[{"type":"MOVE","move":"Rock"},{"type":"MOVE","move":"Paper"}]}',
-            '{"decision_summary":"测试决策说明","actions":[{"type":"WAIT"},{"type":"WAIT"}]}',
-            '{"decision_summary":"测试决策说明","actions":[{"type":"MOVE","move":"Lizard"}]}',
-            '{"decision_summary":"测试决策说明","actions":[{"type":"MOVE","move":null}]}',
-            '{"decision_summary":"测试决策说明","actions":[{"type":"SAY","text":" "}]}',
-            '{"decision_summary":"测试决策说明","actions":[{"type":"SAY","text":1}]}',
-            '{"decision_summary":"测试决策说明","actions":[{"type":"SAY","text":"hello"},{"type":"BAD"}]}',
-            '{"decision_summary":"测试决策说明","actions":[{"type":"WAIT"}],"actions":[{"type":"WAIT"}]}',
-            '{"decision_summary":"测试决策说明","actions":[{"type":"SAY","text":NaN}]}',
+            '{"actions":[]}', '{"actions":{}}', '{"actions":[{"type":"ANALYZE","text":"测试决策说明"},null,{"type":"ENDTURN"}]}',
+            '{"actions":[{"type":"ENDTURN"}],"extra":1}',
+            '{"actions":[{"type":"ANALYZE","text":"测试决策说明"},{"type":"WAIT","text":"wrong"},{"type":"ENDTURN"}]}',
+            '{"actions":[{"type":"ANALYZE","text":"测试决策说明"},{"type":"SAY","text":"hello"}]}',
+            '{"actions":[{"type":"ANALYZE","text":"测试决策说明"},{"type":"MOVE","move":"Rock"},{"type":"MOVE","move":"Paper"},{"type":"ENDTURN"}]}',
+            '{"actions":[{"type":"ANALYZE","text":"策略"},{"type":"ENDTURN"},{"type":"ENDTURN"}]}',
+            '{"actions":[{"type":"ANALYZE","text":"测试决策说明"},{"type":"MOVE","move":"Lizard"},{"type":"ENDTURN"}]}',
+            '{"actions":[{"type":"ANALYZE","text":"测试决策说明"},{"type":"MOVE","move":null},{"type":"ENDTURN"}]}',
+            '{"actions":[{"type":"ANALYZE","text":"测试决策说明"},{"type":"SAY","text":" "},{"type":"ENDTURN"}]}',
+            '{"actions":[{"type":"ANALYZE","text":"测试决策说明"},{"type":"SAY","text":1},{"type":"ENDTURN"}]}',
+            '{"actions":[{"type":"ANALYZE","text":"测试决策说明"},{"type":"SAY","text":"hello"},{"type":"BAD"},{"type":"ENDTURN"}]}',
+            '{"actions":[{"type":"ENDTURN"}],"actions":[{"type":"ENDTURN"}]}',
+            '{"actions":[{"type":"ANALYZE","text":"测试决策说明"},{"type":"SAY","text":NaN},{"type":"ENDTURN"}]}',
         ]
         for raw in cases:
             with self.subTest(raw=raw), self.assertRaises(InvalidResponse):

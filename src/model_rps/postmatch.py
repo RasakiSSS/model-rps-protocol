@@ -1,4 +1,4 @@
-"""赛后公开记录与独立复盘；不参与游戏裁判，也不修改比赛结果。"""
+"""赛后公开记录与复盘；不参与游戏裁判，也不修改比赛结果。"""
 
 import asyncio
 from copy import deepcopy
@@ -6,7 +6,8 @@ from dataclasses import asdict, dataclass
 from time import perf_counter
 
 from .diagnostics import LogError, TraceHandler, request_trace, trace
-from .game import GameState, InvalidResponse, parse_json_object
+from .game import GameState, InvalidResponse
+from .commands import parse_commands, review_text
 from .match import MatchConfig, MatchResult, MatchStatus
 from .players import MatchPlayer, PlayerError
 from .runner import MAX_ATTEMPTS, RequestPolicy
@@ -57,9 +58,7 @@ class MatchArchive:
 
 @dataclass(frozen=True)
 class Review:
-    assessment: str
-    key_moments: str
-    improvements: str
+    text: str
 
 
 @dataclass(frozen=True)
@@ -70,12 +69,7 @@ class ReviewOutcome:
 
 
 def parse_review(raw: str) -> Review:
-    data = parse_json_object(raw)
-    if set(data) != {"assessment", "key_moments", "improvements"}:
-        raise InvalidResponse("复盘必须只包含 assessment、key_moments、improvements 三个字段。")
-    if any(not isinstance(value, str) or not value.strip() for value in data.values()):
-        raise InvalidResponse("复盘的三个字段都必须是非空字符串。")
-    return Review(**data)
+    return Review(review_text(parse_commands(raw)))
 
 
 async def _review(player: MatchPlayer, identity: str, report: dict, policy: RequestPolicy,

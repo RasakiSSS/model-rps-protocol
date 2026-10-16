@@ -10,15 +10,16 @@ from unittest.mock import patch
 
 import httpx
 
+from fixtures import review_payload, turn_payload
 from model_rps.cli import main
 from model_rps.diagnostics import LogError
 from model_rps.game import MovePolicy, GameState, InvalidResponse
 from model_rps.match import MatchConfig, MatchResult, MatchStatus
-from model_rps.players import ChatCompletionPlayer, DEEPSEEK, OPENAI, PlayerError, REVIEW_PROMPT
+from model_rps.players import ChatCompletionPlayer, DEEPSEEK, OPENAI, PlayerError
 from model_rps.postmatch import MatchArchive, parse_review, run_reviews
 from model_rps.runner import RequestPolicy
 
-VALID = json.dumps({"assessment": "整体评价", "key_moments": "第一局结算刻改拳", "improvements": "改善出拳分布"})
+VALID = json.dumps(review_payload("\n\n".join(["整体评价", "第一局结算刻改拳", "改善出拳分布"])))
 REPORT = {"result": {"status": "won", "wins": {"A": 2, "B": 0}}, "games": []}
 FAST = RequestPolicy(timeout=0.02, retry_delay=0)
 
@@ -38,14 +39,14 @@ class Reviewer:
 
 class PostmatchTests(unittest.TestCase):
     def test_strict_review_format(self):
-        self.assertEqual(parse_review(VALID).assessment, "整体评价")
+        self.assertEqual(parse_review(VALID).text, "整体评价\n\n第一局结算刻改拳\n\n改善出拳分布")
         invalid = ["", "```json\n" + VALID + "\n```", "[]",
                    '{"actions":[{"type":"WAIT"}]}',
                    '{"assessment":"a","key_moments":"b","improvements":"c","actions":[]}',
-                   '{"assessment":"a","assessment":"b","key_moments":"b","improvements":"c"}',
-                   '{"assessment":"a","key_moments":NaN,"improvements":"c"}']
+                   '{"actions":[{"type":"REVIEW","text":"a","text":"b"}]}',
+                   '{"actions":[{"type":"REVIEW","text":NaN}]}']
         for value in (None, "", " ", 1, []):
-            invalid.append(json.dumps({"assessment": value, "key_moments": "b", "improvements": "c"}))
+            invalid.append(json.dumps(review_payload(value)))
         for raw in invalid:
             with self.subTest(raw=raw), self.assertRaises(InvalidResponse):
                 parse_review(raw)
@@ -63,7 +64,7 @@ class PostmatchTests(unittest.TestCase):
             payload = json.loads(request.content)
             player = "A" if payload["model"] == OPENAI.model else "B"
             context = json.loads(payload["messages"][-1]["content"])
-            if payload["messages"][0]["content"] == REVIEW_PROMPT:
+            if json.loads(payload["messages"][-1]["content"]).get("phase") == "review":
                 self.assertEqual(len(game_calls), 8)
                 review_calls.append((player, context))
                 review_attempts[player] += 1
@@ -85,8 +86,7 @@ class PostmatchTests(unittest.TestCase):
                 opponent = "B" if player == "A" else "A"
                 self.assertNotIn(f"PRIVATE-{opponent}", json.dumps(payload))
                 move = "Paper" if player == "A" else "Rock"
-                content = json.dumps({"decision_summary": f"PRIVATE-{player} test-key-{player.lower()}",
-                                      "actions": [{"type": "MOVE", "move": move}]})
+                content = json.dumps(turn_payload([{"type": "MOVE", "move": move}], f"PRIVATE-{player} test-key-{player.lower()}"))
             return httpx.Response(200, json={"choices": [{"finish_reason": "stop", "message": {"content": content}}]})
 
         with tempfile.TemporaryDirectory() as directory:
@@ -102,7 +102,7 @@ class PostmatchTests(unittest.TestCase):
             self.assertIsNotNone(next(c for p, c in review_calls if p == "A" and c["correction"] is not None))
             stdout = output.getvalue()
             self.assertLess(stdout.index("赢得 BO3"), stdout.index("PRIVATE-A"))
-            self.assertIn("复盘·整体评价", stdout)
+            self.assertIn("复盘：", stdout)
             self.assertNotIn("test-key-a", stdout)
             root, = (Path(directory) / "logs").iterdir()
             chat = (root / "chat.log").read_text(encoding="utf-8")
@@ -121,14 +121,13 @@ class PostmatchTests(unittest.TestCase):
         def handler(request):
             payload = json.loads(request.content)
             player = "A" if payload["model"] == OPENAI.model else "B"
-            if payload["messages"][0]["content"] == REVIEW_PROMPT:
+            if json.loads(payload["messages"][-1]["content"]).get("phase") == "review":
                 attempts[player] += 1
                 if player == "A":
                     return httpx.Response(401, text="sensitive-server-body")
                 content = VALID
             else:
-                content = json.dumps({"decision_summary": "简短决策", "actions": [
-                    {"type": "MOVE", "move": "Paper" if player == "A" else "Rock"}]})
+                content = json.dumps(turn_payload([{"type": "MOVE", "move": "Paper" if player == "A" else "Rock"}], "简短决策"))
             return httpx.Response(200, json={"choices": [{"finish_reason": "stop", "message": {"content": content}}]})
 
         with tempfile.TemporaryDirectory() as directory:
@@ -141,7 +140,7 @@ class PostmatchTests(unittest.TestCase):
             self.assertEqual(status, 4)
             self.assertEqual(attempts, {"A": 1, "B": 1})
             self.assertIn("赢得 BO1", output.getvalue())
-            self.assertIn("deepseek-flash 复盘·整体评价", output.getvalue())
+            self.assertIn("deepseek-flash 复盘：", output.getvalue())
             self.assertNotIn("sensitive-server-body", output.getvalue())
             root, = (Path(directory) / "logs").iterdir()
             rows = [json.loads(s) for s in (root / "red/debug.log").read_text(encoding="utf-8").splitlines()]
@@ -212,24 +211,29 @@ class AsyncPostmatchTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(LogError):
             await run_reviews((Reviewer([LogError("日志故障")]), Reviewer([VALID])), REPORT, policy=FAST)
 
-    async def test_review_uses_independent_prompt_and_does_not_change_playing_context(self):
+    async def test_review_preserves_own_context_until_next_match(self):
         bodies = []
 
         def handler(request):
             body = json.loads(request.content)
             bodies.append(body)
-            content = VALID if body["messages"][0]["content"] == REVIEW_PROMPT else json.dumps({
-                "decision_summary": "游戏决策", "actions": [{"type": "WAIT"}]})
+            content = VALID if json.loads(body["messages"][-1]["content"]).get("phase") == "review" else json.dumps(turn_payload([], "游戏决策"))
             return httpx.Response(200, json={"choices": [{"finish_reason": "stop", "message": {"content": content}}]})
 
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
             player = ChatCompletionPlayer(client, OPENAI, "test-key")
             await player.respond(GameState(move_policy=MovePolicy.REVISABLE).view_for("B"))
             await player.review({"player": "B", "match": REPORT})
+            await player.review({"player": "B", "match": REPORT}, "重试反馈")
+            player.start_match()
             await player.respond(GameState(move_policy=MovePolicy.REVISABLE).view_for("B"))
-        self.assertEqual(len(bodies[1]["messages"]), 2)
-        self.assertEqual(len(bodies[2]["messages"]), 4)
-        self.assertNotIn("改善出拳分布", json.dumps(bodies[2], ensure_ascii=False))
+        self.assertEqual(len(bodies[1]["messages"]), 4)
+        self.assertEqual(bodies[1]["messages"][:2], bodies[0]["messages"])
+        self.assertEqual(json.loads(bodies[1]["messages"][2]["content"]), turn_payload([], "游戏决策"))
+        self.assertEqual(len(bodies[2]["messages"]), 6)
+        self.assertEqual(bodies[2]["messages"][4]["content"], VALID)
+        self.assertEqual(len(bodies[3]["messages"]), 2)
+        self.assertNotIn("改善出拳分布", json.dumps(bodies[3], ensure_ascii=False))
 
 
 if __name__ == "__main__":

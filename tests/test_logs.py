@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 import httpx
 
+from fixtures import turn_payload
 from model_rps.cli import Console, main
 from model_rps.diagnostics import LogError
 from model_rps.game import MovePolicy
@@ -20,9 +21,7 @@ FAST = RequestPolicy(timeout=1, retry_delay=0)
 
 
 def response(move="Rock", summary="PRIVATE-DECISION", text="中文公开消息"):
-    return json.dumps({"decision_summary": summary, "actions": [
-        {"type": "SAY", "text": text}, {"type": "MOVE", "move": move},
-    ]}, ensure_ascii=False)
+    return json.dumps(turn_payload([{"type": "SAY", "text": text}, {"type": "MOVE", "move": move}], summary), ensure_ascii=False)
 
 
 def records(path):
@@ -48,7 +47,7 @@ class LogTests(unittest.TestCase):
             self.assertIn("思考 token：0", text)
             self.assertIn("MOVE · 出拳：布（Paper）", text)
             self.assertIn("动作是否执行", text)
-            self.assertIn("正文策略分析：未提供", text)
+            self.assertIn("正文策略分析：未提交", text)
             debug = records(logs.path / "red/debug.log")
             self.assertEqual([r["kind"] for r in debug], ["reasoning", "decision"])
             self.assertEqual(debug[0]["content"], "第一段 [REDACTED]\n\n第二段\r\n伪标题\x1b[2J")
@@ -100,7 +99,7 @@ class LogTests(unittest.TestCase):
                 readable = (root / f"{player}/thought.log").read_text(encoding="utf-8")
                 self.assertIn("第 2 局 · Tick", readable)
                 self.assertIn("赛后复盘 · 第 1 次请求 · 复盘结果", readable)
-                self.assertIn("整体评价：", readable)
+                self.assertIn("复盘：", readable)
 
     def test_unique_directories_flush_and_redact_both_keys(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -163,7 +162,7 @@ class AsyncLogTests(unittest.IsolatedAsyncioTestCase):
             if model == DEEPSEEK.model and counts[model] == 1:
                 return httpx.Response(429, text="secret-a secret-b upstream error")
             if model == DEEPSEEK.model and counts[model] == 2:
-                content = '{"actions":[{"type":"MOVE","move":"Rock"}]}'
+                content = '{"actions":[{"type":"MOVE","move":"Rock"},{"type":"ENDTURN"}]}'
             else:
                 content = response("Paper" if model == DEEPSEEK.model else "Rock")
             return httpx.Response(200, json={"choices": [{"message": {"content": content}, "finish_reason": "stop"}],
@@ -189,7 +188,7 @@ class AsyncLogTests(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(all(r["elapsed_seconds"] >= 0 for r in a if r["kind"] == "request_end"))
                 self.assertEqual([r["usage"] for r in b if r["kind"] == "usage"],
                                  [{"prompt_tokens": 100, "completion_tokens": 25}] * 2)
-                self.assertIn("decision_summary", next(r for r in a if r["kind"] == "request_start" and r["attempt"] == 3)["correction"])
+                self.assertIn("ANALYZE", next(r for r in a if r["kind"] == "request_start" and r["attempt"] == 3)["correction"])
                 thoughts = (logs.path / "red/thought.log").read_text(encoding="utf-8")
                 self.assertEqual(thoughts.count("· 请求未完成"), 2)
                 self.assertEqual(thoughts.count("· 策略分析与行动"), 2)

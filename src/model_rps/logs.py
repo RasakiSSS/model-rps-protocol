@@ -113,12 +113,12 @@ class RunLogs:
             lines.append("注：收到思考文本不代表最终动作或复盘通过校验。")
         elif kind == "decision":
             lines.append("状态：通过校验；动作是否执行以 chat.log 的裁判记录为准。")
-            source = "接口思考" if record.get("analysis_source") == "reasoning" else "正文策略分析"
+            source = "ANALYZE" if record.get("summary") is not None else "未提交"
             lines.append(f"分析来源：{source}")
             if record.get("summary") is not None:
                 lines.append(paragraph("正文策略分析：", record["summary"]))
             else:
-                lines.append("正文策略分析：未提供；使用本次请求的接口思考，见上方记录。")
+                lines.append("正文策略分析：未提交。接口思考独立记录，不替代玩家分析。")
             lines.append("拟执行动作：")
             gestures = {"Rock": "石头", "Paper": "布", "Scissors": "剪刀"}
             for index, action in enumerate(record.get("actions", ()), 1):
@@ -127,14 +127,12 @@ class RunLogs:
                 elif action["type"] == "MOVE":
                     lines.append(f"  {index}. MOVE · 出拳：{gestures[action['move']]}（{action['move']}）")
                 else:
-                    lines.append(f"  {index}. WAIT · 等待")
+                    lines.append(f"  {index}. ENDTURN · 未出拳，结束本次行动")
             for action in record.get("ignored_actions", ()):
                 lines.append(f"忽略的 MOVE：{gestures[action['move']]}（{action['move']}）；原拳型已锁定，不作修改。")
         elif kind == "review":
             lines.append("状态：复盘完成")
-            for field, label in (("assessment", "整体评价："), ("key_moments", "关键决策："),
-                                 ("improvements", "改进建议：")):
-                lines.append(paragraph(label, record["review"][field]))
+            lines.append(paragraph("复盘：", record["review"]["text"]))
         else:
             status = "已取消" if record.get("status") == "cancelled" else "请求失败或响应无效"
             lines.append(f"状态：{status}；本次未取得有效{'复盘' if record.get('phase') == 'review' else '动作'}。")

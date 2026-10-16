@@ -9,9 +9,9 @@ from unittest.mock import patch
 
 import httpx
 
+from fixtures import review_payload, turn_payload
 from model_rps.cli import main, make_parser
 from model_rps.config import PlayerConfig, RuntimeConfig, load_config
-from model_rps.players import REVIEW_PROMPT
 
 
 @contextlib.contextmanager
@@ -160,13 +160,13 @@ thinking="low"
                     self.assertEqual(body['reasoning_effort'], 'high' if gpt else 'low')
                     ctx = json.loads(body['messages'][-1]['content'])
                     self.assertEqual(ctx.get('player', ctx.get('state', {}).get('player')), 'Red · GPT 显示名' if gpt else 'Blue · DeepSeek 显示名')
-                    if body['messages'][0]['content'] == REVIEW_PROMPT:
+                    if json.loads(body["messages"][-1]["content"]).get("phase") == "review":
                         self.assertEqual(ctx['match']['result']['wins'], {'Red · GPT 显示名': 2, 'Blue · DeepSeek 显示名': 0})
-                        content = {'assessment': '完成', 'key_moments': '第二局', 'improvements': key}
+                        content = review_payload("\n\n".join(['完成', '第二局', key]))
                     else:
                         if ctx['match']['game'] == 2:
                             self.assertEqual(len(body['messages']), 4)
-                        content = {'decision_summary': key, 'actions': [{'type': 'MOVE', 'move': 'Paper' if gpt else 'Rock'}]}
+                        content = turn_payload([{'type': 'MOVE', 'move': 'Paper' if gpt else 'Rock'}], key)
                     return httpx.Response(200, json={'choices': [{'finish_reason': 'stop', 'message': {'content': json.dumps(content)}}]})
 
                 client = httpx.AsyncClient(transport=httpx.MockTransport(handler))

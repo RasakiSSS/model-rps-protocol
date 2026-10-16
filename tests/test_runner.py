@@ -5,8 +5,8 @@ from model_rps.game import MovePolicy, EndReason, Gesture
 from model_rps.players import PlayerError, ScriptedPlayer, WAIT_RESPONSE
 from model_rps.runner import RequestPolicy, run_game
 
-ROCK = '{"decision_summary":"测试决策说明","actions":[{"type":"MOVE","move":"Rock"}]}'
-SCISSORS = '{"decision_summary":"测试决策说明","actions":[{"type":"MOVE","move":"Scissors"}]}'
+ROCK = '{"actions":[{"type":"ANALYZE","text":"测试决策说明"},{"type":"MOVE","move":"Rock"},{"type":"ENDTURN"}]}'
+SCISSORS = '{"actions":[{"type":"ANALYZE","text":"测试决策说明"},{"type":"MOVE","move":"Scissors"},{"type":"ENDTURN"}]}'
 FAST = RequestPolicy(timeout=1, retry_delay=0)
 
 
@@ -28,7 +28,7 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_retry_uses_same_snapshot_and_does_not_repeat_successful_peer(self):
         a = ScriptedPlayer([ROCK])
-        b = ScriptedPlayer(['{"decision_summary":"测试决策说明","actions":[{"type":"WAIT"},{"type":"MOVE","move":"Paper"}]}', SCISSORS])
+        b = ScriptedPlayer(['{"actions":[{"type":"ANALYZE","text":"测试决策说明"},{"type":"WAIT"},{"type":"MOVE","move":"Paper"},{"type":"ENDTURN"}]}', SCISSORS])
         state = await run_game(a, b, policy=FAST, move_policy=MovePolicy.REVISABLE)
         self.assertEqual(state.completed_ticks, 2)
         self.assertEqual(len(a.requests), 2)
@@ -37,7 +37,7 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(first[0], second[0])
         self.assertFalse(second[0].opponent_committed)
         self.assertEqual(second[0].history, ())
-        self.assertIn("WAIT", second[1])
+        self.assertIn("指令 type", second[1])
         self.assertEqual(state.result.winner, "A")
 
     async def test_format_and_network_failures_share_three_attempts(self):
@@ -49,7 +49,7 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(state.completed_ticks, 2)
 
     async def test_settlement_retry_keeps_same_snapshot_and_can_reverse_winner(self):
-        paper = '{"decision_summary":"最后改拳","actions":[{"type":"MOVE","move":"Paper"}]}'
+        paper = '{"actions":[{"type":"ANALYZE","text":"最后改拳"},{"type":"MOVE","move":"Paper"},{"type":"ENDTURN"}]}'
         a = ScriptedPlayer([ROCK, "invalid", paper])
         b = ScriptedPlayer([ROCK, SCISSORS])
         events = []

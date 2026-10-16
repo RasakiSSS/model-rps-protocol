@@ -8,10 +8,12 @@ from unittest.mock import patch
 
 import httpx
 
+from fixtures import review_payload, turn_payload
+from model_rps.commands import parse_response
 from model_rps.cli import main, make_parser
-from model_rps.game import Action, ActionKind, EndReason, GameState, Gesture, InvalidResponse, MovePolicy, advance, judge, parse_response
+from model_rps.game import Action, ActionKind, EndReason, GameState, Gesture, InvalidResponse, MovePolicy, advance, judge
 from model_rps.match import MatchConfig, run_match
-from model_rps.players import ChatCompletionPlayer, DEEPSEEK, OPENAI, REVIEW_PROMPT, ScriptedPlayer, WAIT_RESPONSE, game_prompt
+from model_rps.players import ChatCompletionPlayer, DEEPSEEK, OPENAI, ScriptedPlayer, WAIT_RESPONSE, game_prompt
 from model_rps.runner import RequestPolicy, run_game
 
 FAST = RequestPolicy(timeout=1, retry_delay=0)
@@ -19,7 +21,7 @@ WAIT = parse_response(WAIT_RESPONSE)
 
 
 def response(*actions):
-    return json.dumps({"decision_summary": "测试锁定决策", "actions": actions})
+    return json.dumps(turn_payload(actions, "测试锁定决策"))
 
 
 def move(value):
@@ -164,11 +166,11 @@ class LockedFlowTests(unittest.IsolatedAsyncioTestCase):
         def handler(request):
             body = json.loads(request.content)
             ctx = json.loads(body["messages"][-1]["content"])
-            if body["messages"][0]["content"] == REVIEW_PROMPT:
+            if json.loads(body["messages"][-1]["content"]).get("phase") == "review":
                 reviews.append(ctx)
                 self.assertEqual(ctx["match"]["move_policy"], "locked")
                 self.assertEqual(len(ctx["match"]["games"][0]["decisions"]), 2)
-                content = json.dumps({"assessment": "完成", "key_moments": "第1局Tick1", "improvements": "观察更多场次"})
+                content = json.dumps(review_payload("\n\n".join(["完成", "第1局Tick1", "观察更多场次"])))
             else:
                 self.assertEqual(body["messages"][0]["content"], game_prompt(MovePolicy.LOCKED))
                 content = move("Paper" if body["model"] == DEEPSEEK.model else "Rock")

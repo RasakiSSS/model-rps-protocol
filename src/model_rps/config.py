@@ -10,6 +10,7 @@ import unicodedata
 from urllib.parse import urlsplit
 
 from .players import DEEPSEEK_THINKING_MODES, OPENAI_THINKING_MODES, MODEL_ADAPTERS
+from .commands import AnalysisPolicy
 
 
 CONFIG_PATH = Path("config.toml")
@@ -17,7 +18,7 @@ _SECTIONS = {"app", "match", "players"}
 _APP = {"mode", "log_dir", "timeout_seconds", "retry_delay_seconds", "max_output_tokens",
         "stream", "stream_first_timeout_seconds", "stream_idle_timeout_seconds"}
 _MATCH = {"move_policy", "best_of", "max_games", "initiative"}
-_PLAYER = {"adapter", "name", "model", "base_url", "api_key", "thinking"}
+_PLAYER = {"adapter", "name", "model", "base_url", "api_key", "thinking", "analysis"}
 
 
 def text_value(value, location: str, *, empty: bool = False) -> None:
@@ -63,6 +64,7 @@ class PlayerConfig:
     name: str | None = None
     api_key: str | None = field(default=None, repr=False)
     adapter: str = "openai"
+    analysis: str = "required"
 
     @property
     def display_name(self) -> str:
@@ -132,7 +134,9 @@ class RuntimeConfig:
                 raise ValueError("此模型标识需要设置独立的显示名称。")
             if key is not None:
                 text_value(key, f"{prefix}.api_key", empty=args.mode == "demo")
-            players.append(PlayerConfig(model, url, thinking, name, key, adapter))
+            analysis = getattr(args, f"{prefix}_analysis")
+            choice_value(analysis, tuple(AnalysisPolicy), f"{prefix}.analysis")
+            players.append(PlayerConfig(model, url, thinking, name, key, adapter, analysis))
         return cls(args.mode, args.timeout, args.retry_delay, args.max_output_tokens, Path(args.log_dir),
                    args.bo, args.max_games, args.move_policy, args.initiative, *players,
                    args.stream, args.stream_first_timeout, args.stream_idle_timeout)
@@ -185,6 +189,8 @@ def load_config(path: Path = CONFIG_PATH, *, required: bool = False) -> dict:
             url_value(player["base_url"], f"players.{name}.base_url")
         if "adapter" in player:
             choice_value(player["adapter"], MODEL_ADAPTERS, f"players.{name}.adapter")
+        if "analysis" in player:
+            choice_value(player["analysis"], tuple(AnalysisPolicy), f"players.{name}.analysis")
         if "thinking" in player:
             adapter = player.get("adapter", "openai" if name in ("red", "gpt") else "deepseek")
             choices = OPENAI_THINKING_MODES if adapter == "openai" else DEEPSEEK_THINKING_MODES

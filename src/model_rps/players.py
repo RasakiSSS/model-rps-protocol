@@ -13,9 +13,10 @@ from urllib.parse import urlsplit
 import httpx
 
 from .game import MAX_TICKS, PlayerView
+from .commands import AnalysisPolicy
 from .diagnostics import trace
 from .identities import named_data
-from .prompts import REVIEW_PROMPT, SYSTEM_PROMPT, game_prompt
+from .prompts import REVIEW_PROMPT, game_prompt
 from .streaming import CompletionStream, StreamError, sse_data
 
 MAX_OUTPUT_TOKENS = 20000
@@ -32,6 +33,8 @@ class ModelResponse:
 
 
 class Player(Protocol):
+    analysis_policy: AnalysisPolicy
+
     async def respond(self, view: PlayerView, feedback: str | None = None) -> str | ModelResponse:
         """返回待校验的 JSON 正文，可附带适配器确认的思考可用性。"""
         ...
@@ -99,7 +102,8 @@ class ChatCompletionPlayer:
     def __init__(self, client: httpx.AsyncClient, spec: ModelSpec, api_key: str, *,
                  max_output_tokens: int = MAX_OUTPUT_TOKENS, names: dict[str, str] | None = None,
                  stream: bool = False, stream_first_timeout: float = 60,
-                 stream_idle_timeout: float = 30) -> None:
+                 stream_idle_timeout: float = 30,
+                 analysis: AnalysisPolicy = AnalysisPolicy.REQUIRED) -> None:
         if not isinstance(api_key, str) or not api_key.strip():
             raise ValueError("API key 未填写。")
         if any(ord(char) < 32 for char in api_key):
@@ -125,10 +129,11 @@ class ChatCompletionPlayer:
         self.stream_first_timeout = stream_first_timeout
         self.stream_idle_timeout = stream_idle_timeout
         self.names = dict(names) if names is not None else {"A": "A", "B": "B"}
+        self.analysis_policy = AnalysisPolicy(analysis)
         self.start_match()
 
     def start_match(self) -> None:
-        self._messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+        self._messages = [{"role": "system", "content": game_prompt("locked", analysis=self.analysis_policy)}]
         self._match_context = None
 
     def start_game(self, context: dict) -> None:
@@ -136,8 +141,8 @@ class ChatCompletionPlayer:
         self._match_context = json.loads(json.dumps(context, ensure_ascii=False))
 
     async def respond(self, view: PlayerView, feedback: str | None = None) -> ModelResponse:
-        self._messages[0] = {"role": "system", "content": game_prompt(view.move_policy, view.initiative)}
-        context = {"state": view.to_dict(), "correction": feedback}
+        self._messages[0] = {"role": "system", "content": game_prompt(view.move_policy, view.initiative, self.analysis_policy)}
+        context = {"phase": "game", "state": view.to_dict(), "correction": feedback}
         if self._match_context is not None:
             context["match"] = self._match_context
         user_message = {"role": "user", "content": json.dumps(named_data(context, self.names), ensure_ascii=False)}
@@ -148,11 +153,12 @@ class ChatCompletionPlayer:
         return response
 
     async def review(self, context: dict, feedback: str | None = None) -> str:
-        # 复盘用独立提示词和完整赛后记录，不修改比赛对话，也不执行动作。
-        response = await self._complete([
-            {"role": "system", "content": REVIEW_PROMPT},
-            {"role": "user", "content": json.dumps(named_data({**context, "correction": feedback}, self.names), ensure_ascii=False)},
-        ])
+        # 延续本席位的比赛历史，只追加双方相同的赛后公开记录和复盘邀请。
+        user_message = {"role": "user", "content": json.dumps(named_data(
+            {**context, "phase": "review", "request": REVIEW_PROMPT, "correction": feedback},
+            self.names), ensure_ascii=False)}
+        response = await self._complete([*self._messages, user_message])
+        self._messages.extend([user_message, {"role": "assistant", "content": response.content}])
         return response.content
 
     async def _complete(self, messages: list[dict]) -> ModelResponse:
@@ -255,7 +261,7 @@ class ChatCompletionPlayer:
             raise PlayerError("模型服务返回的响应结构无效") from None
 
     def _record_reasoning(self, message: dict, usage: object, finish_reason: object) -> bool:
-        # 只保存服务实际提供的字段，不从 decision_summary 重构或推测思考文本。
+        # 只保存服务实际提供的字段，不从 ANALYZE 重构或推测思考文本。
         fields = ("reasoning_content", "reasoning")
         source = next((key for key in fields if isinstance(message.get(key), str) and message[key].strip()), None)
         invalid = any(message.get(key) is not None and not isinstance(message[key], str) for key in fields)
@@ -275,15 +281,17 @@ class ChatCompletionPlayer:
         return source is not None
 
 
-WAIT_RESPONSE = '{"decision_summary":"继续等待。","actions":[{"type":"WAIT"}]}'
+WAIT_RESPONSE = '{"actions":[{"type":"ANALYZE","text":"继续等待。"},{"type":"ENDTURN"}]}'
 
 
 class ScriptedPlayer:
-    """按请求次数消耗预设响应；耗尽后主动 WAIT，适合演示和异常测试。"""
+    """按请求次数消耗预设响应；耗尽后结束行动并等待，适合演示和异常测试。"""
 
-    def __init__(self, responses: list[str | Exception] | None = None, *, repeat_per_game: bool = False) -> None:
+    def __init__(self, responses: list[str | Exception] | None = None, *, repeat_per_game: bool = False,
+                 analysis: AnalysisPolicy = AnalysisPolicy.REQUIRED) -> None:
         self._initial_responses = tuple(responses or [])
         self.repeat_per_game = repeat_per_game
+        self.analysis_policy = AnalysisPolicy(analysis)
         self.start_match()
 
     def start_match(self) -> None:
@@ -298,7 +306,8 @@ class ScriptedPlayer:
 
     async def respond(self, view: PlayerView, feedback: str | None = None) -> str:
         self.requests.append((view, feedback))
-        response = self.responses.popleft() if self.responses else WAIT_RESPONSE
+        fallback = '{"actions":[{"type":"ENDTURN"}]}' if self.analysis_policy == AnalysisPolicy.OFF else WAIT_RESPONSE
+        response = self.responses.popleft() if self.responses else fallback
         if isinstance(response, Exception):
             raise response
         return response
@@ -307,21 +316,27 @@ class ScriptedPlayer:
         report = context["match"]
         result = report["result"]
         last = report["games"][-1]
-        return json.dumps({
-            "assessment": f"模拟复盘：本场完成 {result['games_played']} 局，比分 模拟玩家1 {result['wins']['A']} : {result['wins']['B']} 模拟玩家2，平局 {result['draws']} 局。",
-            "key_moments": f"第 {last['game']} 局在第 {last['completed_ticks']} Tick 结束，原因是 {last['result']['reason']}；本场出拳规则为 {report['move_policy']}。",
-            "improvements": "这些动作来自预设模拟脚本；可对照已公开的动作与说明，检查等待、改拳和结算时机。",
-        }, ensure_ascii=False)
+        text = (f"模拟复盘：本场完成 {result['games_played']} 局，比分 Red {result['wins']['A']} : {result['wins']['B']} Blue，平局 {result['draws']} 局。\n\n"
+                f"第 {last['game']} 局在第 {last['completed_ticks']} Tick 结束，原因是 {last['result']['reason']}；本场出拳规则为 {report['move_policy']}。\n\n"
+                "这些动作来自预设模拟脚本，可对照公开记录检查行动与结算时机。")
+        return json.dumps({"actions": [{"type": "REVIEW", "text": text}]}, ensure_ascii=False)
 
 
-def demo_players(scenario: str) -> tuple[ScriptedPlayer, ScriptedPlayer]:
+def demo_players(scenario: str, *, analysis=(AnalysisPolicy.REQUIRED, AnalysisPolicy.REQUIRED)) -> tuple[ScriptedPlayer, ScriptedPlayer]:
+    policies = iter(analysis)
+
     def scripted(responses=None):
-        return ScriptedPlayer(responses, repeat_per_game=True)
+        policy = AnalysisPolicy(next(policies))
+        if policy == AnalysisPolicy.OFF and responses:
+            # 演示脚本遵守配置，真实模型的违规分析仍由通用校验器拒绝。
+            responses = [json.dumps({"actions": [c for c in json.loads(raw)["actions"]
+                                                 if c["type"] != "ANALYZE"]}, ensure_ascii=False)
+                         for raw in responses]
+        return ScriptedPlayer(responses, repeat_per_game=True, analysis=policy)
 
     def response(*actions: dict) -> str:
-        if not any(action["type"] in ("MOVE", "WAIT") for action in actions):
-            actions = (*actions, {"type": "WAIT"})
-        return json.dumps({"decision_summary": "执行当前模拟场景的预设动作。", "actions": actions}, ensure_ascii=False)
+        return json.dumps({"actions": [{"type": "ANALYZE", "text": "执行当前模拟场景的预设动作。"},
+                                       *actions, {"type": "ENDTURN"}]}, ensure_ascii=False)
 
     rock = response({"type": "MOVE", "move": "Rock"})
     scissors = response({"type": "MOVE", "move": "Scissors"})
@@ -348,6 +363,6 @@ def demo_players(scenario: str) -> tuple[ScriptedPlayer, ScriptedPlayer]:
         waiting = [WAIT_RESPONSE] * (MAX_TICKS - 1)
         return scripted(waiting + [rock]), scripted(waiting + [scissors])
     if scenario == "retry":
-        invalid = response({"type": "WAIT"}, {"type": "MOVE", "move": "Paper"})
+        invalid = response({"type": "ENDTURN"}, {"type": "MOVE", "move": "Paper"})
         return scripted([invalid, rock]), scripted([scissors])
     raise ValueError("未知模拟场景。")

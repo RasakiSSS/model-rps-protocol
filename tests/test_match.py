@@ -3,6 +3,7 @@ import unittest
 
 import httpx
 
+from fixtures import turn_payload
 from model_rps.game import MovePolicy, EndReason
 from model_rps.match import MatchConfig, MatchStatus, run_match
 from model_rps.players import ChatCompletionPlayer, DEEPSEEK, OPENAI, PlayerError, ScriptedPlayer, WAIT_RESPONSE
@@ -15,7 +16,7 @@ def move(gesture, *, summary="本局决策", say=None):
     actions = [{"type": "MOVE", "move": gesture}]
     if say:
         actions.insert(0, {"type": "SAY", "text": say})
-    return json.dumps({"decision_summary": summary, "actions": actions})
+    return json.dumps(turn_payload(actions, summary))
 
 
 class MatchTests(unittest.IsolatedAsyncioTestCase):

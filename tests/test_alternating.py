@@ -9,21 +9,23 @@ from unittest.mock import patch
 
 import httpx
 
+from fixtures import review_payload, turn_payload
+from model_rps.commands import parse_response
 from model_rps.cli import main, make_parser, play
 from model_rps.game import (EndReason, GameState, Gesture, Initiative, InvalidResponse, MovePolicy,
-                            advance_turn, judge, parse_response)
+                            advance_turn, judge)
 from model_rps.match import MatchConfig, run_match
-from model_rps.players import OPENAI, REVIEW_PROMPT, ScriptedPlayer, WAIT_RESPONSE, PlayerError
+from model_rps.players import OPENAI, ScriptedPlayer, WAIT_RESPONSE, PlayerError
 from model_rps.runner import RequestPolicy, run_game
 
 FAST = RequestPolicy(timeout=1, retry_delay=0)
 
 
 def response(move=None, say=None):
-    actions = [{"type": "MOVE", "move": move}] if move else [{"type": "WAIT"}]
+    actions = [{"type": "MOVE", "move": move}] if move else []
     if say:
         actions.insert(0, {"type": "SAY", "text": say})
-    return json.dumps({"decision_summary": "策略分析", "actions": actions})
+    return json.dumps(turn_payload(actions, "策略分析"))
 
 
 class AlternatingRulesTests(unittest.TestCase):
@@ -85,24 +87,24 @@ class AlternatingRulesTests(unittest.TestCase):
             GameState(initiative="alternating", move_policy="revisable")
         with self.assertRaises(ValueError):
             advance_turn(GameState(initiative="alternating"), "B", parse_response(WAIT_RESPONSE))
-        for actions in ([{"type": "SAY", "text": "只说不选"}],
+        for actions in ([{"type": "ENDTURN"}, {"type": "SAY", "text": "结束后说话"}],
                         [{"type": "WAIT"}, {"type": "MOVE", "move": "Rock"}],
                         [{"type": "WAIT"}, {"type": "WAIT"}]):
             with self.assertRaises(InvalidResponse):
-                parse_response(json.dumps({"decision_summary": "分析", "actions": actions}))
+                parse_response(json.dumps(turn_payload(actions, "分析")))
         self.assertEqual(len(parse_response(response(say="聊天并等待"))), 2)
 
 
 class AlternatingFlowTests(unittest.IsolatedAsyncioTestCase):
     async def test_retry_same_snapshot_no_extra_turn_and_immediate_peer_context(self):
-        invalid = '{"decision_summary":"分析","actions":[{"type":"SAY","text":"不能公开"}]}'
+        invalid = '{"actions":[{"type":"ANALYZE","text":"分析"},{"type":"SAY","text":"不能公开"}]}'
         a = ScriptedPlayer([invalid, response("Rock", "已公开的发言")])
         b = ScriptedPlayer([response("Paper")])
         state = await run_game(a, b, initiative="alternating", policy=FAST)
         self.assertEqual(state.result.winner, "B")
         self.assertEqual(state.turns, (1, 1))
         self.assertIs(a.requests[0][0], a.requests[1][0])
-        self.assertIn("必须且只能有一个", a.requests[1][1])
+        self.assertIn("ENDTURN", a.requests[1][1])
         self.assertEqual(len(b.requests), 1)
         self.assertTrue(b.requests[0][0].opponent_committed)
         self.assertIn("已公开的发言", repr(b.requests[0][0].history))
@@ -184,14 +186,14 @@ class AlternatingFlowTests(unittest.IsolatedAsyncioTestCase):
             body = json.loads(request.content)
             ctx = json.loads(body["messages"][-1]["content"])
             identity = "A" if body["model"] == OPENAI.model else "B"
-            if body["messages"][0]["content"] == REVIEW_PROMPT:
+            if json.loads(body["messages"][-1]["content"]).get("phase") == "review":
                 reviews.append(ctx)
                 self.assertEqual(ctx["match"]["initiative"], "alternating")
                 self.assertEqual(ctx["match"]["games"][0]["first_player"], "Red · GPT 测试")
                 self.assertEqual(ctx["match"]["games"][1]["first_player"], "Blue · DeepSeek 测试")
                 self.assertEqual(ctx["match"]["games"][0]["decisions"][2]["ignored_actions"],
                                  [{"type": "MOVE", "move": "Paper"}])
-                content = json.dumps({"assessment": "测试复盘", "key_moments": "有效动作与忽略动作分别评价", "improvements": "继续观察"})
+                content = json.dumps(review_payload("\n\n".join(["测试复盘", "有效动作与忽略动作分别评价", "继续观察"])))
             else:
                 state = ctx["state"]
                 requests.append((ctx["match"]["game"], state["tick"], identity))

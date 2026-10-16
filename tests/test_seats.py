@@ -8,9 +8,9 @@ from unittest.mock import patch
 
 import httpx
 
+from fixtures import review_payload, turn_payload
 from model_rps.cli import main, make_parser
 from model_rps.config import RuntimeConfig, load_config
-from model_rps.players import REVIEW_PROMPT
 
 
 class SeatConfigTests(unittest.TestCase):
@@ -75,8 +75,8 @@ class SeatConfigTests(unittest.TestCase):
                             self.assertEqual(body['thinking']['type'], 'enabled' if seat == 'Red' else 'disabled')
                         else:
                             self.assertNotIn('thinking', body)
-                        if body['messages'][0]['content'] == REVIEW_PROMPT:
-                            content = {'assessment': '完成', 'key_moments': '两局', 'improvements': '观察'}
+                        if json.loads(body["messages"][-1]["content"]).get("phase") == "review":
+                            content = review_payload("\n\n".join(['完成', '两局', '观察']))
                         else:
                             opponent = 'Blue' if seat == 'Red' else 'Red'
                             self.assertNotIn(f'PRIVATE-{opponent}', json.dumps(body))
@@ -88,8 +88,7 @@ class SeatConfigTests(unittest.TestCase):
                                 failed = True
                                 content = {'invalid': 'PRIVATE-Red-invalid'}
                             else:
-                                content = {'decision_summary': f'PRIVATE-{seat}', 'actions': [
-                                    {'type': 'MOVE', 'move': 'Paper' if seat == 'Red' else 'Rock'}]}
+                                content = turn_payload([{'type': 'MOVE', 'move': 'Paper' if seat == 'Red' else 'Rock'}], f'PRIVATE-{seat}')
                         return httpx.Response(200, json={'choices': [{'finish_reason': 'stop', 'message': {
                             'content': json.dumps(content)}}]})
 

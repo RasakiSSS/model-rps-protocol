@@ -24,6 +24,7 @@ model = "gpt-5.6-sol"
 base_url = "https://ai.yuhuantin.icu/v1"
 api_key = ""                         # 填写该服务的密钥
 thinking = "high"                    # off / low / medium / high / xhigh / max
+analysis = "required"                # off / optional / required；独立于思考设置
 
 [players.blue]
 adapter = "deepseek"                # 两席可使用完全相同的 adapter、model、地址和密钥
@@ -32,6 +33,7 @@ model = "deepseek-flash"
 base_url = "https://api.deepseek.com"
 api_key = ""
 thinking = "high"                    # off / low / high / max
+analysis = "required"                # required 时每次行动必须提交 ANALYZE
 
 # 同模型对战：将 red 的 adapter、model、base_url、api_key 复制到 blue。
 # thinking 可以相同，也可以分别设置；双方始终保持独立历史和日志。

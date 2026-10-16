@@ -4,12 +4,13 @@ from dataclasses import replace
 
 import httpx
 
-from model_rps.game import MovePolicy, EndReason, GameState, advance, parse_response
+from model_rps.commands import parse_response
+from model_rps.game import MovePolicy, EndReason, GameState, advance
 from model_rps.players import ChatCompletionPlayer, DEEPSEEK, OPENAI, PlayerError, WAIT_RESPONSE
 from model_rps.runner import RequestPolicy, run_game
 
-ROCK = '{"decision_summary":"测试决策说明","actions":[{"type":"MOVE","move":"Rock"}]}'
-SCISSORS = '{"decision_summary":"测试决策说明","actions":[{"type":"MOVE","move":"Scissors"}]}'
+ROCK = '{"actions":[{"type":"ANALYZE","text":"测试决策说明"},{"type":"MOVE","move":"Rock"},{"type":"ENDTURN"}]}'
+SCISSORS = '{"actions":[{"type":"ANALYZE","text":"测试决策说明"},{"type":"MOVE","move":"Scissors"},{"type":"ENDTURN"}]}'
 
 
 def completion(content=ROCK, finish_reason="stop"):
@@ -114,7 +115,7 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
                 if counts[model] == 1:
                     return httpx.Response(429)
                 if counts[model] == 2:
-                    return httpx.Response(200, json=completion('{"decision_summary":"测试决策说明","actions":[]}'))
+                    return httpx.Response(200, json=completion('{"actions":[]}'))
                 return httpx.Response(200, json=completion(ROCK))
             return httpx.Response(200, json=completion(SCISSORS))
 

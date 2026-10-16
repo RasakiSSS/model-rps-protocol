@@ -20,6 +20,7 @@ from .logs import RunLogs
 from .identities import player_names
 from .match import MatchConfig, MatchStatus, run_match
 from .players import MODEL_ADAPTERS, demo_players
+from .commands import AnalysisPolicy
 from .postmatch import MatchArchive, run_reviews
 from .runner import RequestPolicy
 
@@ -53,6 +54,8 @@ def make_parser(config: dict | None = None) -> argparse.ArgumentParser:
     for seat, old, adapter in (("red", "openai", "openai"), ("blue", "deepseek", "deepseek")):
         parser.add_argument(f"--{seat}-adapter", choices=tuple(MODEL_ADAPTERS), default=adapter,
                             help=f"{seat.title()} 使用的请求参数方案，与模型名和席位无关")
+        parser.add_argument(f"--{seat}-analysis", choices=tuple(AnalysisPolicy), default="required",
+                            help=f"{seat.title()} 的策略分析：off 关闭、optional 可选、required 必填")
         for key in ("base-url", "model", "name", "thinking"):
             parser.add_argument(f"--{seat}-{key}", f"--{old}-{key}", dest=f"{seat}_{key.replace('-', '_')}",
                                 default="off" if key == "thinking" else None,
@@ -98,6 +101,7 @@ async def play(args: argparse.Namespace) -> int:
                        target_wins=config.target_wins, players=names, mode=settings.mode,
                        timeout=policy.timeout, retry_delay=policy.retry_delay, move_policy=config.move_policy,
                        thinking=thinking, initiative=settings.initiative,
+                       analysis={"A": settings.red.analysis, "B": settings.blue.analysis},
                        max_output_tokens=settings.max_output_tokens, stream=settings.stream, debug=args.debug,
                        stream_first_timeout_seconds=settings.stream_first_timeout_seconds,
                        stream_idle_timeout_seconds=settings.stream_idle_timeout_seconds)
@@ -136,14 +140,14 @@ async def play(args: argparse.Namespace) -> int:
         if result.status != MatchStatus.TECHNICAL_ERROR:
             report = logs.redact_value(archive.report(config, result))
             console.game, console.tick = 0, 0
-            console.write("\nSystem：赛后公开双方决策说明（按局号、Tick 和玩家排列）。")
+            console.write("\nSystem：赛后公开双方策略分析（按局号、Tick 和玩家排列）。")
             logs.lifecycle("postmatch_disclosure_start")
             for game in report["games"]:
                 for decision in game["decisions"]:
                     console.game, console.tick = decision["game"], decision["tick"]
                     label = f"第 {console.game} 局 Tick {console.tick} {console.names[decision['player']]}"
                     actions = json.dumps(decision["actions"], ensure_ascii=False)
-                    analysis = decision["summary"] or "未提供正文分析；接口思考已记录于私有日志。"
+                    analysis = decision["summary"] or "本次未提交策略分析。"
                     console.write(f"{label}｜动作：{display_text(actions)}｜分析：{display_text(analysis)}")
                     if decision["ignored_actions"]:
                         console.write(f"{label}｜锁定后忽略的 MOVE：{display_text(json.dumps(decision['ignored_actions'], ensure_ascii=False))}")
@@ -157,10 +161,9 @@ async def play(args: argparse.Namespace) -> int:
                 if outcome.review is None:
                     console.write(f"System：{name}，{display_text(outcome.error)}")
                     continue
-                for label, text in (("整体评价", outcome.review.assessment),
-                                    ("关键决策", outcome.review.key_moments),
-                                    ("改进建议", outcome.review.improvements)):
-                    console.write(f"{name} 复盘·{label}：{display_text(text)}")
+                console.write(f"{name} 复盘：")
+                for line in outcome.review.text.splitlines():
+                    console.write(f"  {display_text(line)}")
             complete = all(outcome.review is not None for outcome in outcomes)
             logs.lifecycle("review_end", complete=complete,
                            players={outcome.player: "complete" if outcome.review else "failed" for outcome in outcomes})
@@ -172,7 +175,7 @@ async def play(args: argparse.Namespace) -> int:
     if settings.mode == "demo":
         names = player_names("模拟玩家1", "模拟玩家2")
         with RunLogs(settings.log_dir, names=names) as logs:
-            return await execute(lambda: demo_players(scenario),
+            return await execute(lambda: demo_players(scenario, analysis=tuple(p.analysis for p in settings.seats)),
                                  names, logs)
     if settings.red.api_key is not None or settings.blue.api_key is not None:
         if not settings.red.api_key or not settings.blue.api_key:

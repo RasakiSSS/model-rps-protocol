@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import Literal
@@ -78,79 +77,6 @@ def validate_turn(actions: tuple[Action, ...], own_move: Gesture | None, move_po
 
 def ignored_move(action: Action, own_move: Gesture | None, move_policy: MovePolicy) -> bool:
     return action.kind == ActionKind.MOVE and own_move is not None and move_policy == MovePolicy.LOCKED
-
-
-def _unique_object(pairs: list[tuple[str, object]]) -> dict:
-    result = {}
-    for key, value in pairs:
-        if key in result:
-            raise InvalidResponse("JSON 对象不能包含重复字段。")
-        result[key] = value
-    return result
-
-
-def _reject_constant(value: str) -> None:
-    raise InvalidResponse("JSON 不能包含 NaN 或 Infinity。")
-
-
-@dataclass(frozen=True)
-class Decision:
-    summary: str | None
-    actions: tuple[Action, ...]
-
-
-def parse_json_object(raw: str) -> dict:
-    """解析严格 JSON 对象，拒绝重复字段、非标准常量及额外文本。"""
-    if not isinstance(raw, str) or not raw.strip():
-        raise InvalidResponse("响应不能为空，请返回完整 JSON 对象。")
-    try:
-        payload = json.loads(raw, object_pairs_hook=_unique_object, parse_constant=_reject_constant)
-    except (json.JSONDecodeError, RecursionError):
-        raise InvalidResponse("响应必须是完整 JSON，不要添加 Markdown 标记或解释文字。") from None
-    if not isinstance(payload, dict):
-        raise InvalidResponse("响应必须是 JSON 对象。")
-    return payload
-
-
-def parse_decision(raw: str, *, has_reasoning: bool = False) -> Decision:
-    """严格解析整个 JSON 对象；任何一个动作无效则全部拒绝。"""
-    payload = parse_json_object(raw)
-    if set(payload) not in ({"decision_summary", "actions"}, {"actions"}):
-        raise InvalidResponse("响应只允许包含 decision_summary 和 actions 字段。")
-    if "decision_summary" not in payload:
-        if not has_reasoning:
-            raise InvalidResponse("本次接口未返回思考文本，请在 decision_summary 中提供策略分析。")
-    elif not isinstance(payload["decision_summary"], str) or not payload["decision_summary"].strip():
-        raise InvalidResponse("decision_summary 如提供，必须是非空的策略分析字符串。")
-    if not isinstance(payload["actions"], list) or not payload["actions"]:
-        raise InvalidResponse("actions 必须是非空动作列表；主动等待请使用 WAIT。")
-    actions = []
-    expected = {ActionKind.SAY: {"type", "text"}, ActionKind.MOVE: {"type", "move"},
-                ActionKind.WAIT: {"type"}}
-    for item in payload["actions"]:
-        if not isinstance(item, dict):
-            raise InvalidResponse("每个动作必须是 JSON 对象。")
-        try:
-            kind = ActionKind(item.get("type"))
-        except (ValueError, TypeError):
-            raise InvalidResponse("动作 type 必须是 SAY、MOVE 或 WAIT。") from None
-        if set(item) != expected[kind]:
-            raise InvalidResponse(f"{kind.value} 字段不正确；请按规定的动作格式返回。")
-        if kind == ActionKind.MOVE:
-            try:
-                move = Gesture(item["move"])
-            except (ValueError, TypeError):
-                raise InvalidResponse("move 必须是 Rock、Paper 或 Scissors。") from None
-            actions.append(Action(kind, move=move))
-        else:
-            actions.append(Action(kind, text=item.get("text")))
-    result = tuple(actions)
-    validate_actions(result)
-    return Decision(payload.get("decision_summary"), result)
-
-
-def parse_response(raw: str) -> tuple[Action, ...]:
-    return parse_decision(raw).actions
 
 
 @dataclass(frozen=True)

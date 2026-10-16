@@ -9,17 +9,18 @@ from unittest.mock import patch
 
 import httpx
 
+from fixtures import review_payload, turn_payload
 from model_rps.cli import make_parser, play
 from model_rps.config import RuntimeConfig, load_config
 from model_rps.diagnostics import LogError, request_trace
 from model_rps.game import EndReason, GameState
 from model_rps.logs import RunLogs
-from model_rps.players import ChatCompletionPlayer, OPENAI, DEEPSEEK, PlayerError, ScriptedPlayer, REVIEW_PROMPT
+from model_rps.players import ChatCompletionPlayer, OPENAI, DEEPSEEK, PlayerError, ScriptedPlayer
 from model_rps.runner import RequestPolicy, run_game
 
 
 def decision(move='Paper', summary='PRIVATE-ANALYSIS'):
-    return json.dumps({'decision_summary': summary, 'actions': [{'type': 'MOVE', 'move': move}]}, ensure_ascii=False)
+    return json.dumps(turn_payload([{'type': 'MOVE', 'move': move}], summary), ensure_ascii=False)
 
 
 def event(delta=None, finish=None, **extra):
@@ -144,9 +145,9 @@ class StreamingTests(unittest.IsolatedAsyncioTestCase):
             inputs.append(json.loads(request.content))
             if calls == 1:
                 return response([event({'reasoning_content': 'FAILED-NATIVE', 'content': decision('Rock', 'FAILED-BODY')})])
-            # First attempt's reasoning cannot authorize missing summary on the retry.
+            # Native reasoning cannot replace ANALYZE, including on a retry.
             if calls == 2:
-                return response(complete('{"actions":[{"type":"MOVE","move":"Paper"}]}'))
+                return response(complete('{"actions":[{"type":"MOVE","move":"Paper"},{"type":"ENDTURN"}]}'))
             return response(complete(decision('Paper')))
 
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
@@ -284,8 +285,8 @@ class StreamingTests(unittest.IsolatedAsyncioTestCase):
                     bodies.append(body)
                     self.assertTrue(body['stream'])
                     self.assertNotIn('NATIVE-PRIVATE', json.dumps(body))
-                    if body['messages'][0]['content'] == REVIEW_PROMPT:
-                        content = json.dumps({'assessment': '评价', 'key_moments': '关键局', 'improvements': '改进'})
+                    if json.loads(body["messages"][-1]["content"]).get("phase") == "review":
+                        content = json.dumps(review_payload("\n\n".join(['评价', '关键局', '改进'])))
                     else:
                         content = decision('Paper' if body['model'] == OPENAI.model else 'Rock')
                         context = json.loads(body['messages'][-1]['content'])
@@ -302,7 +303,7 @@ class StreamingTests(unittest.IsolatedAsyncioTestCase):
                 output = io.StringIO()
                 with patch('model_rps.cli.httpx.AsyncClient', return_value=client), patch('model_rps.cli.open_debug_window'), contextlib.redirect_stdout(output):
                     self.assertEqual(await play(args), 0)
-                self.assertEqual(sum(body['messages'][0]['content'] == REVIEW_PROMPT for body in bodies), 2)
+                self.assertEqual(sum(json.loads(body["messages"][-1]["content"]).get("phase") == "review" for body in bodies), 2)
                 self.assertNotIn('NATIVE-PRIVATE', output.getvalue())
                 self.assertNotIn('接收思考', output.getvalue())
                 self.assertNotIn('等待响应', output.getvalue())

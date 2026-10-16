@@ -7,6 +7,7 @@ from pathlib import Path
 from .config import RuntimeConfig
 from .players import ChatCompletionPlayer, MODEL_ADAPTERS, configure_thinking
 
+
 def load_keys(path: Path) -> tuple[str, str]:
     """只读取两个字符串常量，不执行密钥文件中的 Python 代码。"""
     try:
@@ -39,6 +40,7 @@ def model_players(client, settings: RuntimeConfig, keys, names):
                                           base_url=config.base_url), config.thinking)
         players.append(ChatCompletionPlayer(
             client, spec, key, names=names, max_output_tokens=settings.max_output_tokens,
+            analysis=config.analysis,
             stream=settings.stream, stream_first_timeout=settings.stream_first_timeout_seconds,
             stream_idle_timeout=settings.stream_idle_timeout_seconds))
     return tuple(players)

@@ -10,21 +10,23 @@ from unittest.mock import patch
 
 import httpx
 
+from fixtures import review_payload, turn_payload
+from model_rps.commands import parse_decision, AnalysisPolicy
 from model_rps.cli import make_parser, play
 from model_rps.diagnostics import LogError, request_trace
-from model_rps.game import EndReason, GameState, InvalidResponse, MovePolicy, parse_decision
+from model_rps.game import EndReason, GameState, InvalidResponse, MovePolicy
 from model_rps.logs import RunLogs
 from model_rps.players import (ChatCompletionPlayer, DEEPSEEK, OPENAI, DEEPSEEK_THINKING_MODES,
-                               OPENAI_THINKING_MODES, PlayerError, REVIEW_PROMPT, ScriptedPlayer,
+                               OPENAI_THINKING_MODES, PlayerError, ScriptedPlayer,
                                configure_thinking, game_prompt)
 from model_rps.runner import RequestPolicy, run_game
 
 FAST = RequestPolicy(timeout=1, retry_delay=0)
-REVIEW = json.dumps({"assessment": "评价", "key_moments": "关键局", "improvements": "改进"})
+REVIEW = json.dumps(review_payload("\n\n".join(["评价", "关键局", "改进"])))
 
 
 def decision(move="Paper", summary="简短说明"):
-    return json.dumps({"decision_summary": summary, "actions": [{"type": "MOVE", "move": move}]})
+    return json.dumps(turn_payload([{"type": "MOVE", "move": move}], summary))
 
 
 def completion(content=None, *, finish="stop", usage=None, **message_fields):
@@ -63,7 +65,7 @@ class ThinkingTests(unittest.IsolatedAsyncioTestCase):
         def handler(request):
             body = json.loads(request.content)
             bodies.append(body)
-            return completion(REVIEW if body["messages"][0]["content"] == REVIEW_PROMPT else decision())
+            return completion(REVIEW if json.loads(body["messages"][-1]["content"]).get("phase") == "review" else decision())
 
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
             for spec, modes in ((DEEPSEEK, DEEPSEEK_THINKING_MODES), (OPENAI, OPENAI_THINKING_MODES)):
@@ -97,7 +99,7 @@ class ThinkingTests(unittest.IsolatedAsyncioTestCase):
                                  "Bearer test-key-b" if player == "A" else "Bearer test-key-a")
                 self.assertEqual(ctx.get("player", ctx.get("state", {}).get("player")), ("Red · " if player == "A" else "Blue · ") + spec.model)
                 self.assertNotIn("NATIVE-", json.dumps(body))
-                if body["messages"][0]["content"] == REVIEW_PROMPT:
+                if json.loads(body["messages"][-1]["content"]).get("phase") == "review":
                     self.assertEqual(len(bodies), 5 if player == "A" else 6)
                     self.assertEqual(ctx["match"]["result"]["wins"], {"Red · " + OPENAI.model: 2, "Blue · " + DEEPSEEK.model: 0})
                     content = REVIEW
@@ -105,8 +107,6 @@ class ThinkingTests(unittest.IsolatedAsyncioTestCase):
                     if ctx["match"]["game"] == 2:
                         self.assertGreater(len(body["messages"]), 2)
                     content = decision("Paper" if player == "A" else "Rock", f"SUMMARY-{player}")
-                    if mode != "off":
-                        content = json.dumps({"actions": json.loads(content)["actions"]})
                 self.assertEqual(body.get("reasoning_effort"),
                                  (None if mode == "off" else mode) if player == "B" else ("none" if mode == "off" else mode))
                 extra = {"reasoning_content": f"NATIVE-{player} test-key-a test-key-b"} if mode != "off" else {}
@@ -121,9 +121,8 @@ class ThinkingTests(unittest.IsolatedAsyncioTestCase):
                 with patch("model_rps.cli.httpx.AsyncClient", return_value=client), contextlib.redirect_stdout(io.StringIO()) as output:
                     self.assertEqual(await play(args), 0)
                 self.assertNotIn("NATIVE-", output.getvalue())
-                self.assertEqual("SUMMARY-A" in output.getvalue(), a_mode == "off")
-                if a_mode != "off" or b_mode != "off":
-                    self.assertIn("未提供正文分析", output.getvalue())
+                self.assertIn("SUMMARY-A", output.getvalue())
+                self.assertIn("SUMMARY-B", output.getvalue())
                 self.assertIn(f"参赛模型：Red · {OPENAI.model} vs Blue · {DEEPSEEK.model}", output.getvalue())
                 root, = (path / "logs").iterdir()
                 for directory, player, mode in (("red", OPENAI.model, a_mode), ("blue", DEEPSEEK.model, b_mode)):
@@ -134,9 +133,10 @@ class ThinkingTests(unittest.IsolatedAsyncioTestCase):
                     native = [r for r in rows if r["kind"] == "reasoning"]
                     decisions = [r for r in rows if r["kind"] == "decision"]
                     self.assertEqual(len(decisions), 2)
-                    self.assertTrue(all(r["analysis_source"] == ("decision_summary" if mode == "off" else "reasoning")
+                    self.assertTrue(all(r["analysis_source"] == "analyze"
                                         for r in decisions))
-                    self.assertTrue(all((r["summary"] is None) == (mode != "off") for r in decisions))
+                    self.assertTrue(all(r["summary"] is not None for r in decisions))
+                    self.assertTrue(all(r["has_reasoning"] == (mode != "off") for r in decisions))
                     self.assertEqual(len(native), 0 if mode == "off" else 3)
                     if native:
                         self.assertEqual([r["phase"] for r in native], ["game", "game", "review"])
@@ -168,14 +168,15 @@ class ThinkingTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(record["content"])
             self.assertEqual(record["reasoning_tokens"], expected)
 
-    async def test_missing_reasoning_requires_analysis_even_with_thinking_tokens(self):
-        for extra in ({}, {"reasoning_content": " "}, {"reasoning_content": {"text": "invalid"}}):
+    async def test_required_analysis_is_independent_of_native_reasoning_and_tokens(self):
+        for extra in ({}, {"reasoning_content": " "}, {"reasoning_content": {"text": "invalid"}},
+                      {"reasoning_content": "native reasoning cannot replace ANALYZE"}):
             bodies, events = [], []
 
             def handler(request):
                 body = json.loads(request.content)
                 bodies.append(body)
-                content = '{"actions":[{"type":"MOVE","move":"Paper"}]}' if len(bodies) == 1 else decision()
+                content = '{"actions":[{"type":"MOVE","move":"Paper"},{"type":"ENDTURN"}]}' if len(bodies) == 1 else decision()
                 return completion(content, usage={"reasoning_tokens": 100}, **extra)
 
             with self.subTest(extra=extra):
@@ -185,10 +186,10 @@ class ThinkingTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(state.result.winner, "A")
                 self.assertEqual(len(bodies), 2)
                 correction = json.loads(bodies[1]["messages"][-1]["content"])["correction"]
-                self.assertIn("本次接口未返回思考文本", correction)
+                self.assertIn("ANALYZE", correction)
                 self.assertEqual(len([r for r in events if r["kind"] == "decision" and r["player"] == "A"]), 1)
 
-    async def test_reasoning_permission_is_per_response_and_does_not_bypass_action_validation(self):
+    async def test_reasoning_cannot_bypass_command_or_analysis_validation(self):
         bodies, events = [], []
 
         def handler(request):
@@ -197,7 +198,7 @@ class ThinkingTests(unittest.IsolatedAsyncioTestCase):
                 return completion('{"actions":[{"type":"WAIT"},{"type":"MOVE","move":"Paper"}]}',
                                   reasoning_content="PRIVATE-ONLY-FIRST-ATTEMPT")
             if len(bodies) == 2:
-                return completion('{"actions":[{"type":"MOVE","move":"Paper"}]}')
+                return completion('{"actions":[{"type":"MOVE","move":"Paper"},{"type":"ENDTURN"}]}')
             return completion(decision())
 
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
@@ -205,20 +206,20 @@ class ThinkingTests(unittest.IsolatedAsyncioTestCase):
             state = await run_game(player, ScriptedPlayer([decision("Rock")]), policy=FAST, on_request=events.append)
         self.assertEqual(state.result.winner, "A")
         self.assertEqual(len(bodies), 3)
-        self.assertIn("必须且只能有一个 MOVE 或 WAIT", json.loads(bodies[1]["messages"][-1]["content"])["correction"])
-        self.assertIn("未返回思考文本", json.loads(bodies[2]["messages"][-1]["content"])["correction"])
+        self.assertIn("指令 type", json.loads(bodies[1]["messages"][-1]["content"])["correction"])
+        self.assertIn("ANALYZE", json.loads(bodies[2]["messages"][-1]["content"])["correction"])
         self.assertNotIn("PRIVATE-ONLY-FIRST-ATTEMPT", json.dumps(bodies))
         self.assertEqual(len([r for r in events if r["kind"] == "decision" and r["player"] == "A"]), 1)
 
     async def test_reasoning_does_not_relax_json_or_provided_analysis_types(self):
-        accepted = parse_decision('{"actions":[{"type":"WAIT"}]}', has_reasoning=True)
+        accepted = parse_decision('{"actions":[{"type":"ENDTURN"}]}', analysis=AnalysisPolicy.OPTIONAL)
         self.assertIsNone(accepted.summary)
-        for raw in ('{"actions":[{"type":"WAIT"}],"actions":[{"type":"WAIT"}]}',
-                    '{"actions":[{"type":"WAIT"}],"has_reasoning":true}',
-                    *[json.dumps({"decision_summary": value, "actions": [{"type": "WAIT"}]})
+        for raw in ('{"actions":[{"type":"ENDTURN"}],"actions":[{"type":"ENDTURN"}]}',
+                    '{"actions":[{"type":"ENDTURN"}],"has_reasoning":true}',
+                    *[json.dumps(turn_payload([], value))
                       for value in (None, "", " ", 1, [])]):
             with self.subTest(raw=raw), self.assertRaises(InvalidResponse):
-                parse_decision(raw, has_reasoning=True)
+                parse_decision(raw, analysis=AnalysisPolicy.OPTIONAL)
 
     async def test_alternate_or_invalid_optional_reasoning_fields_do_not_become_actions(self):
         for field, value, status in (("reasoning", "provider text", "returned"),

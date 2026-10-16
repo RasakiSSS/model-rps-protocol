@@ -9,7 +9,8 @@ from dataclasses import dataclass
 from typing import Callable
 
 from .game import (Action, Event, GameState, Initiative, InvalidResponse, MovePolicy, PlayerView,
-                   abort, advance, advance_turn, ignored_move, parse_decision, validate_turn)
+                   abort, advance, advance_turn, ignored_move, validate_turn)
+from .commands import AnalysisPolicy, parse_decision
 from .diagnostics import LogError, TraceHandler, request_trace, trace
 from .players import ModelResponse, Player, PlayerError
 
@@ -52,10 +53,11 @@ async def _request_actions(player: Player, view: PlayerView, policy: RequestPoli
                 raw = response.content if isinstance(response, ModelResponse) else response
                 has_reasoning = isinstance(response, ModelResponse) and response.has_reasoning
                 trace("raw_response", content=raw)
-                decision = parse_decision(raw, has_reasoning=has_reasoning)
+                decision = parse_decision(raw, analysis=getattr(player, "analysis_policy", AnalysisPolicy.REQUIRED))
                 validate_turn(decision.actions, view.own_move, view.move_policy)
                 trace("decision", summary=decision.summary, status="validated",
-                      analysis_source="reasoning" if has_reasoning else "decision_summary",
+                      analysis_source="analyze" if decision.summary is not None else "none",
+                      has_reasoning=has_reasoning,
                       actions=[action.to_dict() for action in decision.actions
                                if not ignored_move(action, view.own_move, view.move_policy)],
                       ignored_actions=[action.to_dict() for action in decision.actions
