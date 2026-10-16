@@ -3,131 +3,25 @@
 from __future__ import annotations
 
 import argparse
-import ast
 import asyncio
 import json
 import sys
-import unicodedata
-from dataclasses import replace
 from pathlib import Path
 
 import httpx
 
-from .game import EndReason, Event, GameState, MAX_TICKS, MovePolicy
+from .game import MovePolicy
+from .console import Console, display_text
+from .debug_console import open_debug_window
+from .player_factory import load_keys, model_players
 from .config import CONFIG_PATH, RuntimeConfig, load_config, parser_defaults
 from .diagnostics import LogError
 from .logs import RunLogs
 from .identities import player_names
 from .match import MatchConfig, MatchStatus, run_match
-from .players import (ChatCompletionPlayer, DEEPSEEK, OPENAI, DEEPSEEK_THINKING_MODES,
-                      OPENAI_THINKING_MODES, configure_thinking, demo_players)
+from .players import MODEL_ADAPTERS, demo_players
 from .postmatch import MatchArchive, run_reviews
 from .runner import RequestPolicy
-
-GESTURE_NAMES = {"Rock": "石头", "Paper": "布", "Scissors": "剪刀"}
-
-
-def display_text(text: str) -> str:
-    """将控制字符转义，确保玩家发言不会清屏或伪造新的系统消息行。"""
-    return "".join(f"\\u{ord(char):04x}" if unicodedata.category(char).startswith("C") else char
-                   for char in text)
-
-
-class Console:
-    def __init__(self, names: dict[str, str], logs: RunLogs | None = None, *, debug: bool = False) -> None:
-        self.names = {key: display_text(value) for key, value in names.items()}
-        self.logs = logs
-        self.game = 0
-        self.tick = 0
-        self.debug = debug
-
-    def write(self, text: str, *, debug_only: bool = False) -> None:
-        if self.logs is not None:
-            text = self.logs.redact(text)
-            self.logs.chat(text, game=self.game, tick=self.tick)
-        if not debug_only or self.debug:
-            print(text, flush=True)
-
-    def request_progress(self, game: int, record: dict) -> None:
-        if not self.debug or record['kind'] != 'stream_status':
-            return
-        label = {'waiting': '等待响应', 'thinking': '接收思考', 'generating': '接收正文'}[record['status']]
-        phase = '复盘' if record.get('phase') == 'review' else f"第 {game} 局 Tick {record['tick']}"
-        text = f"System：{self.names[record['player']]} · {phase} · 第 {record['attempt']} 次请求：{label}。"
-        # 进度仅显示在调试终端；原始状态已写入 debug.log，不注入公开历史。
-        print(self.logs.redact(text) if self.logs else text, flush=True)
-
-    def event(self, event: Event) -> None:
-        self.tick = event.tick
-        name = self.names.get(event.player, "System")
-        if event.kind == "tick":
-            if event.text == "settlement":
-                self.write(f"\n── 结算 Tick {event.tick}（最后一次行动机会）──", debug_only=True)
-            else:
-                self.write(f"\n── Tick {event.tick}/{MAX_TICKS} ──", debug_only=True)
-        elif event.kind == "turn":
-            self.write(f"\n── 行动 Tick {event.tick}/{MAX_TICKS * 2} · {name} 第 {event.text}/{MAX_TICKS} 次行动 ──", debug_only=True)
-        elif event.kind == "turn_reminder":
-            self.write(f"System：{name}，{event.text}")
-        elif event.kind == "move_ignored":
-            self.write(f"System：{name} 出拳已锁定，本次 MOVE 无效；保留原拳型。")
-        elif event.kind == "say":
-            self.write(f"{name}：{display_text(event.text)}")
-        elif event.kind in ("commit", "revise"):
-            action = "已提交出拳" if event.kind == "commit" else "已修改出拳"
-            self.write(f"System：{name} {action}。")
-        elif event.kind == "wait":
-            self.write(f"System：{name} 本 Tick 选择等待。")
-        # reveal 仍在裁判事件与复盘数据中；终端和 chat.log 由 result 统一展示。
-        elif event.kind in ("retry", "error"):
-            self.write(f"System：{name}，{display_text(event.text)}")
-        elif event.kind in ("reminder", "settlement_pending"):
-            self.write(f"System：{event.text}")
-
-    def result(self, state: GameState) -> None:
-        result = state.result
-        if result is None:
-            raise ValueError("对局尚未结束。")
-        if result.reason == EndReason.TECHNICAL_ERROR:
-            text = "技术异常中止；本局不计胜负。"
-        elif result.reason == EndReason.NO_MOVES:
-            text = "双方到期未出拳，平局。"
-        elif result.reason == EndReason.FORFEIT:
-            loser = "B" if result.winner == "A" else "A"
-            text = f"{self.names[loser]} 到期未出拳，视为弃权；{self.names[result.winner]} 获胜。"
-        elif result.winner is None:
-            text = "双方拳型相同，平局。"
-        else:
-            text = f"{self.names[result.winner]} 获胜。"
-        if result.reason != EndReason.TECHNICAL_ERROR:
-            moves = '；'.join(f"{self.names[player]} → {GESTURE_NAMES[move] if move is not None else '未出拳'}"
-                             for player, move in zip(('A', 'B'), state.moves))
-            text = f'{moves}；{text}'
-        self.write(f"System：{text}")
-
-
-def load_keys(path: Path) -> tuple[str, str]:
-    """只读取两个字符串常量，不执行密钥文件中的 Python 代码。"""
-    try:
-        tree = ast.parse(path.read_text(encoding="utf-8-sig"))
-    except (OSError, SyntaxError, UnicodeError):
-        raise ValueError("无法读取密钥文件；请创建 local_secrets.py 并填写两个 API key 字符串。") from None
-    keys = {}
-    for statement in tree.body:
-        if not isinstance(statement, ast.Assign):
-            continue
-        for target in statement.targets:
-            if isinstance(target, ast.Name) and target.id in ("DEEPSEEK_API_KEY", "OPENAI_API_KEY"):
-                try:
-                    value = ast.literal_eval(statement.value)
-                except (ValueError, TypeError, SyntaxError):
-                    raise ValueError("密钥必须直接填写为字符串常量。") from None
-                if not isinstance(value, str) or not value.strip():
-                    raise ValueError(f"请在本地密钥文件中填写 {target.id}。")
-                keys[target.id] = value
-    if set(keys) != {"DEEPSEEK_API_KEY", "OPENAI_API_KEY"}:
-        raise ValueError("密钥文件必须包含 DEEPSEEK_API_KEY 和 OPENAI_API_KEY 两个字符串常量。")
-    return keys["DEEPSEEK_API_KEY"], keys["OPENAI_API_KEY"]
 
 
 def make_parser(config: dict | None = None) -> argparse.ArgumentParser:
@@ -138,7 +32,7 @@ def make_parser(config: dict | None = None) -> argparse.ArgumentParser:
     source.add_argument("--no-config", action="store_true", help="忽略 TOML，使用内置默认值和命令行参数")
     parser.add_argument("--mode", choices=("demo", "live"), default="live",
                         help="live 真实模型（默认）；demo 模拟对局")
-    parser.add_argument('--debug', action='store_true', help='显示 Tick 标题和流式请求进度；默认隐藏，不影响日志记录')
+    parser.add_argument('--debug', action='store_true', help='额外打开独立调试窗口；前台与普通模式相同（Windows）')
     parser.add_argument("--move-policy", choices=tuple(MovePolicy), default=MovePolicy.LOCKED.value,
                         help="locked 提交后锁定（默认）；revisable 允许改拳，下一 Tick 结算")
     parser.add_argument("--scenario", choices=("locked", "change", "settlement", "draw", "forfeit", "deadline", "retry"),
@@ -156,17 +50,14 @@ def make_parser(config: dict | None = None) -> argparse.ArgumentParser:
     parser.add_argument("--bo", type=int, default=1, help="正奇数；BO N 先赢 N//2+1 局，默认 BO1")
     parser.add_argument("--max-games", type=int, help="包含平局的实际总局数上限，默认 10×BO")
     parser.add_argument("--log-dir", type=Path, default=Path("logs"), help="日志根目录，默认 logs")
-    parser.add_argument("--deepseek-base-url", default=DEEPSEEK.base_url)
-    parser.add_argument("--openai-base-url", default=OPENAI.base_url)
-    parser.add_argument("--deepseek-model", default=DEEPSEEK.model)
-    parser.add_argument("--openai-model", default=OPENAI.model)
-    parser.add_argument("--openai-name", help="GPT 玩家显示名称，省略时使用模型标识")
-    parser.add_argument("--deepseek-name", help="DeepSeek 玩家显示名称，省略时使用模型标识")
-    parser.add_argument("--deepseek-thinking", choices=DEEPSEEK_THINKING_MODES, default="off",
-                        help="DeepSeek 思考档位，默认 off；启用可选 low/high/max")
-    parser.add_argument("--openai-thinking", choices=OPENAI_THINKING_MODES, default="off",
-                        help="GPT 思考档位，默认 off；启用可选 low/medium/high/xhigh/max")
-    parser.set_defaults(openai_api_key=None, deepseek_api_key=None)
+    for seat, old, adapter in (("red", "openai", "openai"), ("blue", "deepseek", "deepseek")):
+        parser.add_argument(f"--{seat}-adapter", choices=tuple(MODEL_ADAPTERS), default=adapter,
+                            help=f"{seat.title()} 使用的请求参数方案，与模型名和席位无关")
+        for key in ("base-url", "model", "name", "thinking"):
+            parser.add_argument(f"--{seat}-{key}", f"--{old}-{key}", dest=f"{seat}_{key.replace('-', '_')}",
+                                default="off" if key == "thinking" else None,
+                                help=f"{seat.title()} 的 {key}；旧参数 --{old}-{key} 仍兼容")
+        parser.set_defaults(**{f"{seat}_api_key": None})
     if config:
         parser.set_defaults(**parser_defaults(config))
     return parser
@@ -175,12 +66,12 @@ def make_parser(config: dict | None = None) -> argparse.ArgumentParser:
 async def play(args: argparse.Namespace) -> int:
     # 显式选择旧密钥文件时，配置中的密钥不参与校验或回退。
     if args.secrets_file is not None:
-        args = argparse.Namespace(**{**vars(args), "openai_api_key": None, "deepseek_api_key": None})
+        args = argparse.Namespace(**{**vars(args), "red_api_key": None, "blue_api_key": None})
     settings = RuntimeConfig.from_args(args)
     policy = RequestPolicy(timeout=settings.timeout_seconds,
                            retry_delay=0 if settings.mode == "demo" else settings.retry_delay_seconds)
     config = MatchConfig(settings.best_of, settings.max_games, MovePolicy(settings.move_policy), settings.initiative)
-    thinking = {"A": settings.gpt.thinking, "B": settings.deepseek.thinking}
+    thinking = {"A": settings.red.thinking, "B": settings.blue.thinking}
     if settings.mode == "demo" and any(mode != "off" for mode in thinking.values()):
         raise ValueError("思考开关仅用于真实模型；demo 使用预设脚本，请保持双方思考为 off。")
     scenario = args.scenario or ("locked" if config.move_policy == MovePolicy.LOCKED else "change")
@@ -188,7 +79,9 @@ async def play(args: argparse.Namespace) -> int:
         raise ValueError("change 和 settlement 场景需要 --move-policy revisable。")
 
     async def execute(factory, names, logs):
-        console = Console(names, logs, debug=args.debug)
+        console = Console(names, logs)
+        if args.debug:
+            open_debug_window(logs)
         players = factory()
         archive = MatchArchive()
         print(f"日志目录：{display_text(str(logs.path.resolve()))}", flush=True)
@@ -228,7 +121,6 @@ async def play(args: argparse.Namespace) -> int:
         def request(number, record):
             logs.request(number, record)
             archive.request(number, record)
-            console.request_progress(number, record)
 
         result = await run_match(lambda: players, config=config, policy=policy, on_start=start,
                                  on_event=lambda number, event: console.event(event),
@@ -282,28 +174,19 @@ async def play(args: argparse.Namespace) -> int:
         with RunLogs(settings.log_dir, names=names) as logs:
             return await execute(lambda: demo_players(scenario),
                                  names, logs)
-    if settings.gpt.api_key is not None or settings.deepseek.api_key is not None:
-        if not settings.gpt.api_key or not settings.deepseek.api_key:
-            raise ValueError("TOML 配置必须同时填写两个模型的 api_key。")
-        keys = (settings.deepseek.api_key, settings.gpt.api_key)
+    if settings.red.api_key is not None or settings.blue.api_key is not None:
+        if not settings.red.api_key or not settings.blue.api_key:
+            raise ValueError("TOML 配置必须同时填写 Red 和 Blue 的 api_key。")
+        keys = (settings.red.api_key, settings.blue.api_key)
     else:
-        keys = load_keys(args.secrets_file or Path("local_secrets.py"))
-    deepseek = configure_thinking(replace(DEEPSEEK, base_url=settings.deepseek.base_url, model=settings.deepseek.model),
-                                 settings.deepseek.thinking)
-    openai = configure_thinking(replace(OPENAI, base_url=settings.gpt.base_url, model=settings.gpt.model),
-                               settings.gpt.thinking)
-    names = player_names(settings.gpt.display_name, settings.deepseek.display_name)
+        deepseek_key, openai_key = load_keys(args.secrets_file or Path("local_secrets.py"))
+        legacy_keys = {"openai": openai_key, "deepseek": deepseek_key}
+        keys = tuple(legacy_keys[player.adapter] for player in settings.seats)
+    names = player_names(settings.red.display_name, settings.blue.display_name)
     async with httpx.AsyncClient(timeout=policy.timeout, follow_redirects=False) as client:
-        def factory():
-            options = dict(names=names, max_output_tokens=settings.max_output_tokens, stream=settings.stream,
-                           stream_first_timeout=settings.stream_first_timeout_seconds,
-                           stream_idle_timeout=settings.stream_idle_timeout_seconds)
-            return (ChatCompletionPlayer(client, openai, keys[1], **options),
-                    ChatCompletionPlayer(client, deepseek, keys[0], **options))
-
-        factory()  # 写日志或发请求之前先校验模型配置。
+        players = model_players(client, settings, keys, names)
         with RunLogs(settings.log_dir, secrets=keys, names=names) as logs:
-            return await execute(factory, names, logs)
+            return await execute(lambda: players, names, logs)
 
 
 def main(argv: list[str] | None = None) -> int:

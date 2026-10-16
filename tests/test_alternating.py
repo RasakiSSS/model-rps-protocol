@@ -187,8 +187,8 @@ class AlternatingFlowTests(unittest.IsolatedAsyncioTestCase):
             if body["messages"][0]["content"] == REVIEW_PROMPT:
                 reviews.append(ctx)
                 self.assertEqual(ctx["match"]["initiative"], "alternating")
-                self.assertEqual(ctx["match"]["games"][0]["first_player"], "GPT 测试")
-                self.assertEqual(ctx["match"]["games"][1]["first_player"], "DeepSeek 测试")
+                self.assertEqual(ctx["match"]["games"][0]["first_player"], "Red · GPT 测试")
+                self.assertEqual(ctx["match"]["games"][1]["first_player"], "Blue · DeepSeek 测试")
                 self.assertEqual(ctx["match"]["games"][0]["decisions"][2]["ignored_actions"],
                                  [{"type": "MOVE", "move": "Paper"}])
                 content = json.dumps({"assessment": "测试复盘", "key_moments": "有效动作与忽略动作分别评价", "improvements": "继续观察"})
@@ -218,10 +218,10 @@ class AlternatingFlowTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(reviews), 2)
             self.assertIn("本次 MOVE 无效", output.getvalue())
             run, = (root / "logs").iterdir()
-            thought = (run / "GPT 测试/thought.log").read_text(encoding="utf-8")
+            thought = (run / "red/thought.log").read_text(encoding="utf-8")
             self.assertIn("忽略的 MOVE：布", thought)
-            debug = [json.loads(s) for s in (run / "GPT 测试/debug.log").read_text(encoding="utf-8").splitlines()]
-            self.assertEqual([r["first_player"] for r in debug if r["kind"] == "game_start"], ["GPT 测试", "DeepSeek 测试"])
+            debug = [json.loads(s) for s in (run / "red/debug.log").read_text(encoding="utf-8").splitlines()]
+            self.assertEqual([r["first_player"] for r in debug if r["kind"] == "game_start"], ["Red · GPT 测试", "Blue · DeepSeek 测试"])
 
     def test_toml_alternating_and_incompatible_rules_fail_before_network(self):
         with tempfile.TemporaryDirectory() as directory:

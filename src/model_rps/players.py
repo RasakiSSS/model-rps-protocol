@@ -76,6 +76,8 @@ DEEPSEEK = ModelSpec("DeepSeek V4.1 Flash", "deepseek-flash", "https://api.deeps
 OPENAI = ModelSpec("GPT-6 Luna", "gpt-6-luna", "https://ai.yuhuantin.icu/v1",
                    "max_completion_tokens", {"reasoning_effort": "none"}, thinking_api="openai")
 
+MODEL_ADAPTERS = {"openai": OPENAI, "deepseek": DEEPSEEK}
+
 
 def configure_thinking(spec: ModelSpec, mode: str) -> ModelSpec:
     """显式选择服务参数；不改模型标识、提示词或共享的默认配置。"""

@@ -28,32 +28,34 @@ class CliTests(unittest.TestCase):
             with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as directory:
                 process = subprocess.run(
                     [sys.executable, "-m", "model_rps", "--no-config", "--mode", "demo", "--scenario", scenario,
-                     "--max-games", "1", "--log-dir", directory, "--move-policy", "revisable", "--debug"],
+                     "--max-games", "1", "--log-dir", directory, "--move-policy", "revisable"],
                     capture_output=True, text=True, encoding="utf-8", env=env, timeout=15,
                 )
                 self.assertEqual(process.returncode, 3 if scenario == "draw" else 0, process.stderr)
                 self.assertIn(result, process.stdout)
+                run, = Path(directory).iterdir()
+                chat = (run / "chat.log").read_text(encoding="utf-8")
                 if scenario in ("draw", "forfeit", "deadline"):
                     for remaining in (10, 2, 1):
                         self.assertEqual(process.stdout.count(f"提交截止还剩 {remaining} Tick"), 1)
-                    self.assertIn("Tick 20/20", process.stdout)
+                    self.assertIn("Tick 20/20", chat)
                 if scenario == "change":
                     before_reveal = process.stdout.split("→")[0]
                     self.assertNotIn("石头", before_reveal)
                     self.assertNotIn("布", before_reveal)
                     self.assertIn("已修改出拳", process.stdout)
-                    self.assertIn("结算 Tick 3", process.stdout)
-                    self.assertNotIn("Tick 4", process.stdout)
+                    self.assertIn("结算 Tick 3", chat)
+                    self.assertNotIn("Tick 4", chat)
                 if scenario == "retry":
                     self.assertIn("第 2/3 次请求", process.stdout)
-                    self.assertIn("结算 Tick 2", process.stdout)
+                    self.assertIn("结算 Tick 2", chat)
                 if scenario == "settlement":
-                    self.assertIn("结算 Tick 2", process.stdout)
+                    self.assertIn("结算 Tick 2", chat)
                     self.assertIn("已修改出拳", process.stdout)
                     self.assertIn("→ 布", process.stdout)
                 if scenario == "deadline":
-                    self.assertIn("结算 Tick 21", process.stdout)
-                    self.assertNotIn("Tick 22", process.stdout)
+                    self.assertIn("结算 Tick 21", chat)
+                    self.assertNotIn("Tick 22", chat)
 
     def test_debug_controls_headers_without_changing_game_or_chat_records(self):
         for initiative in ('simultaneous', 'alternating'):
@@ -61,41 +63,19 @@ class CliTests(unittest.TestCase):
                 with self.subTest(initiative=initiative, debug=debug), tempfile.TemporaryDirectory() as directory:
                     output = io.StringIO()
                     args = ['--no-config', '--mode', 'demo', '--initiative', initiative, '--log-dir', directory]
-                    with contextlib.redirect_stdout(output):
+                    with contextlib.redirect_stdout(output), patch("model_rps.cli.open_debug_window") as window:
                         self.assertEqual(main(args + (['--debug'] if debug else [])), 0)
                     text = output.getvalue()
                     header = '── 行动 Tick' if initiative == 'alternating' else '── Tick'
-                    self.assertEqual(header in text, debug)
+                    self.assertNotIn(header, text)
+                    self.assertEqual(window.call_count, int(debug))
                     results = [line for line in text.splitlines() if '→' in line]
-                    self.assertEqual(results, ['System：模拟玩家1 → 石头；模拟玩家2 → 剪刀；模拟玩家1 获胜。'])
+                    self.assertEqual(results, ['System：Red · 模拟玩家1 → 石头；Blue · 模拟玩家2 → 剪刀；Red · 模拟玩家1 获胜。'])
                     run, = Path(directory).iterdir()
                     chat = (run / 'chat.log').read_text(encoding='utf-8')
                     self.assertIn(header, chat)
                     self.assertIn(results[0], chat)
                     self.assertIn('已提交出拳', text)
-
-    def test_progress_debug_privacy_redaction_and_review_phase(self):
-        for debug in (False, True):
-            with self.subTest(debug=debug), tempfile.TemporaryDirectory() as directory:
-                with RunLogs(Path(directory), secrets=('secret-key',)) as logs:
-                    console = Console({'A': '模型secret-key', 'B': '模型乙'}, logs, debug=debug)
-                    output = io.StringIO()
-                    with contextlib.redirect_stdout(output):
-                        for phase in ('game', 'review'):
-                            for status in ('waiting', 'thinking', 'generating'):
-                                console.request_progress(1, {'kind': 'stream_status', 'player': 'A', 'tick': 2,
-                                                             'attempt': 1, 'phase': phase, 'status': status,
-                                                             'content': 'PRIVATE-THOUGHT'})
-                    text = output.getvalue()
-                    self.assertNotIn('secret-key', text)
-                    self.assertNotIn('PRIVATE-THOUGHT', text)
-                    if debug:
-                        self.assertIn('复盘', text)
-                        self.assertIn('接收思考', text)
-                        self.assertIn('第 1 局 Tick 2', text)
-                    else:
-                        self.assertEqual(text, '')
-                    self.assertEqual((logs.path / 'chat.log').read_text(encoding='utf-8'), '')
 
     def test_compact_results_draw_forfeit_and_no_reveal_on_technical_failure(self):
         cases = [
@@ -109,7 +89,7 @@ class CliTests(unittest.TestCase):
         for state, expected in cases:
             with self.subTest(reason=state.result.reason):
                 output = io.StringIO()
-                console = Console({'A': '玩家甲', 'B': '玩家乙'}, debug=True)
+                console = Console({'A': '玩家甲', 'B': '玩家乙'})
                 with contextlib.redirect_stdout(output):
                     # 单独揭晓事件不再产生重复行。
                     console.event(Event(1, 'reveal', 'A', 'Rock'))

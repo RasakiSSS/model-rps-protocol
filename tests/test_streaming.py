@@ -225,7 +225,7 @@ class StreamingTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_live_thought_flush_split_secrets_and_failed_attempt_markers(self):
         with tempfile.TemporaryDirectory() as directory, RunLogs(Path(directory), secrets=('secret-key',)) as logs:
-            thought = logs.path / 'player_a/thought.log'
+            thought = logs.path / 'red/thought.log'
             seen = []
 
             def observe():
@@ -246,11 +246,11 @@ class StreamingTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn('    第一段\n    \n    第二段 [REDACTED]\\u001b[2J', text)
             self.assertIn('接收未完成', text)
             self.assertNotIn('\x1b', text)
-            debug = (logs.path / 'player_a/debug.log').read_text(encoding='utf-8')
+            debug = (logs.path / 'red/debug.log').read_text(encoding='utf-8')
             self.assertNotIn('secret-key', debug + text)
             self.assertNotIn('secret-', debug)
             self.assertEqual((logs.path / 'chat.log').read_text(encoding='utf-8'), '')
-            self.assertEqual((logs.path / 'player_b/thought.log').read_text(encoding='utf-8'), '')
+            self.assertEqual((logs.path / 'blue/thought.log').read_text(encoding='utf-8'), '')
 
     async def test_log_failure_stops_stream_without_retry(self):
         streams = []
@@ -300,13 +300,13 @@ class StreamingTests(unittest.IsolatedAsyncioTestCase):
                                                  '--move-policy', rule, '--secrets-file', str(keys), '--log-dir', str(root / 'logs')]
                                                 + (['--debug'] if debug else []))
                 output = io.StringIO()
-                with patch('model_rps.cli.httpx.AsyncClient', return_value=client), contextlib.redirect_stdout(output):
+                with patch('model_rps.cli.httpx.AsyncClient', return_value=client), patch('model_rps.cli.open_debug_window'), contextlib.redirect_stdout(output):
                     self.assertEqual(await play(args), 0)
                 self.assertEqual(sum(body['messages'][0]['content'] == REVIEW_PROMPT for body in bodies), 2)
                 self.assertNotIn('NATIVE-PRIVATE', output.getvalue())
-                self.assertEqual('接收思考' in output.getvalue(), debug)
-                self.assertEqual('等待响应' in output.getvalue(), debug)
-                self.assertEqual('接收正文' in output.getvalue(), debug)
+                self.assertNotIn('接收思考', output.getvalue())
+                self.assertNotIn('等待响应', output.getvalue())
+                self.assertNotIn('接收正文', output.getvalue())
                 self.assertNotIn('PRIVATE-ANALYSIS', output.getvalue().split('赛后公开')[0])
                 run, = (root / 'logs').iterdir()
                 self.assertNotIn('NATIVE-PRIVATE', (run / 'chat.log').read_text(encoding='utf-8'))

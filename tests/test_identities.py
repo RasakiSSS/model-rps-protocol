@@ -10,7 +10,8 @@ from unittest.mock import patch
 import httpx
 
 from model_rps.cli import make_parser, play
-from model_rps.identities import log_directory, named_data, player_names
+from model_rps.identities import SEAT_DIRECTORIES, named_data, player_names
+from model_rps.logs import RunLogs
 from model_rps.players import REVIEW_PROMPT
 
 
@@ -22,23 +23,20 @@ class IdentityTests(unittest.TestCase):
         original = deepcopy(value)
         converted = named_data(value, player_names('model-one', 'model-two'))
         self.assertEqual(value, original)
-        self.assertEqual(converted['player'], 'model-one')
-        self.assertEqual(converted['wins'], {'model-one': 2, 'model-two': 1})
-        self.assertEqual(converted['games'][0]['result']['winner'], 'model-two')
-        self.assertEqual(converted['games'][0]['events'][0], {'player': 'model-two', 'text': 'A/B'})
+        self.assertEqual(converted['player'], 'Red · model-one')
+        self.assertEqual(converted['wins'], {'Red · model-one': 2, 'Blue · model-two': 1})
+        self.assertEqual(converted['games'][0]['result']['winner'], 'Blue · model-two')
+        self.assertEqual(converted['games'][0]['events'][0], {'player': 'Blue · model-two', 'text': 'A/B'})
         self.assertEqual(converted['summary'], 'A')
         self.assertEqual(converted['content'], original['content'])
 
-    def test_custom_names_cannot_escape_log_directory_or_collide_after_sanitizing(self):
+    def test_custom_names_do_not_define_log_paths_or_collide(self):
         names = ['../model', '..\\model', 'CON', 'NUL.txt', '.', 'org/model', 'org_model', 'x' * 200]
-        directories = [log_directory(name) for name in names]
-        self.assertEqual(len(directories), len(set(directories)))
-        for directory in directories:
-            self.assertNotIn('/', directory)
-            self.assertNotIn('\\', directory)
-            self.assertNotIn(directory, ('.', '..'))
-        same = player_names('same', 'SAME')
-        self.assertEqual(len({log_directory(v).casefold() for v in same.values()}), 2)
+        with tempfile.TemporaryDirectory() as directory:
+            for name in names:
+                with RunLogs(Path(directory), names=player_names(name, name)) as logs:
+                    self.assertEqual({p.name for p in logs.path.iterdir()}, {'chat.log', 'red', 'blue'})
+        self.assertEqual(player_names('same', 'SAME'), {'A': 'Red · same', 'B': 'Blue · SAME'})
 
 
 class NamedCLITests(unittest.IsolatedAsyncioTestCase):
@@ -97,16 +95,16 @@ class NamedCLITests(unittest.IsolatedAsyncioTestCase):
                 self.assertIn(f"比分 {names['A']} 2 : 0 {names['B']}", output.getvalue())
                 self.assertNotIn('Player A', output.getvalue())
                 run, = (root / 'logs').iterdir()
-                self.assertEqual({p.name for p in run.iterdir()}, {'chat.log', *(log_directory(n) for n in names.values())})
-                for name in names.values():
-                    self.assertIn(f'模型：{name}', (run / log_directory(name) / 'thought.log').read_text(encoding='utf-8'))
-                    for file in (run / log_directory(name)).glob('debug.log'):
+                self.assertEqual({p.name for p in run.iterdir()}, {'chat.log', 'red', 'blue'})
+                for seat, name in names.items():
+                    self.assertIn(f'模型：{name}', (run / SEAT_DIRECTORIES[seat] / 'thought.log').read_text(encoding='utf-8'))
+                    for file in (run / SEAT_DIRECTORIES[seat]).glob('debug.log'):
                         for line in file.read_text(encoding='utf-8').splitlines():
                             row = json.loads(line)
                             check(row)
                             if 'player' in row:
                                 self.assertEqual(row['player'], name)
-                self.assertIn('A/B 是原始文字，不应改写', (run / log_directory(names['A']) / 'thought.log').read_text(encoding='utf-8'))
+                self.assertIn('A/B 是原始文字，不应改写', (run / 'red' / 'thought.log').read_text(encoding='utf-8'))
 
 
 if __name__ == '__main__':

@@ -9,7 +9,7 @@ import tomllib
 import unicodedata
 from urllib.parse import urlsplit
 
-from .players import DEEPSEEK_THINKING_MODES, OPENAI_THINKING_MODES
+from .players import DEEPSEEK_THINKING_MODES, OPENAI_THINKING_MODES, MODEL_ADAPTERS
 
 
 CONFIG_PATH = Path("config.toml")
@@ -17,7 +17,7 @@ _SECTIONS = {"app", "match", "players"}
 _APP = {"mode", "log_dir", "timeout_seconds", "retry_delay_seconds", "max_output_tokens",
         "stream", "stream_first_timeout_seconds", "stream_idle_timeout_seconds"}
 _MATCH = {"move_policy", "best_of", "max_games", "initiative"}
-_PLAYER = {"name", "model", "base_url", "api_key", "thinking"}
+_PLAYER = {"adapter", "name", "model", "base_url", "api_key", "thinking"}
 
 
 def text_value(value, location: str, *, empty: bool = False) -> None:
@@ -62,6 +62,7 @@ class PlayerConfig:
     thinking: str
     name: str | None = None
     api_key: str | None = field(default=None, repr=False)
+    adapter: str = "openai"
 
     @property
     def display_name(self) -> str:
@@ -79,11 +80,15 @@ class RuntimeConfig:
     max_games: int | None
     move_policy: str
     initiative: str
-    gpt: PlayerConfig
-    deepseek: PlayerConfig
+    red: PlayerConfig
+    blue: PlayerConfig
     stream: bool = False
     stream_first_timeout_seconds: float = 60
     stream_idle_timeout_seconds: float = 30
+
+    @property
+    def seats(self) -> tuple[PlayerConfig, PlayerConfig]:
+        return self.red, self.blue
 
     @classmethod
     def from_args(cls, args) -> RuntimeConfig:
@@ -107,9 +112,15 @@ class RuntimeConfig:
             if args.max_games < args.bo // 2 + 1:
                 raise ValueError("max_games 不能小于目标胜局数。")
         players = []
-        for prefix, choices in (("openai", OPENAI_THINKING_MODES), ("deepseek", DEEPSEEK_THINKING_MODES)):
+        for prefix in ("red", "blue"):
+            adapter = getattr(args, f"{prefix}_adapter")
+            choice_value(adapter, MODEL_ADAPTERS, f"{prefix}.adapter")
+            spec = MODEL_ADAPTERS[adapter]
+            choices = OPENAI_THINKING_MODES if adapter == "openai" else DEEPSEEK_THINKING_MODES
             model, url, thinking, name, key = (getattr(args, f"{prefix}_{key}") for key in
                                              ("model", "base_url", "thinking", "name", "api_key"))
+            model = spec.model if model is None else model
+            url = spec.base_url if url is None else url
             text_value(model, f"{prefix}.model")
             url_value(url, f"{prefix}.base_url")
             choice_value(thinking, choices, f"{prefix}.thinking")
@@ -121,7 +132,7 @@ class RuntimeConfig:
                 raise ValueError("此模型标识需要设置独立的显示名称。")
             if key is not None:
                 text_value(key, f"{prefix}.api_key", empty=args.mode == "demo")
-            players.append(PlayerConfig(model, url, thinking, name, key))
+            players.append(PlayerConfig(model, url, thinking, name, key, adapter))
         return cls(args.mode, args.timeout, args.retry_delay, args.max_output_tokens, Path(args.log_dir),
                    args.bo, args.max_games, args.move_policy, args.initiative, *players,
                    args.stream, args.stream_first_timeout, args.stream_idle_timeout)
@@ -161,17 +172,24 @@ def load_config(path: Path = CONFIG_PATH, *, required: bool = False) -> dict:
     players = _table(data, "players")
     _check_keys(app, _APP, "[app]")
     _check_keys(match, _MATCH, "[match]")
-    _check_keys(players, {"gpt", "deepseek"}, "[players]")
-    for name in ("gpt", "deepseek"):
+    _check_keys(players, {"red", "blue", "gpt", "deepseek"}, "[players]")
+    if set(players) & {"red", "blue"} and set(players) & {"gpt", "deepseek"}:
+        raise ValueError("请统一使用 players.red/blue；不能与旧版 players.gpt/deepseek 混用。")
+    legacy = bool(set(players) & {"gpt", "deepseek"})
+    for name in players:
         player = _table(players, name)
         _check_keys(player, _PLAYER, f"[players.{name}]")
         for key, value in player.items():
             text_value(value, f"players.{name}.{key}", empty=key == "api_key")
         if "base_url" in player:
             url_value(player["base_url"], f"players.{name}.base_url")
+        if "adapter" in player:
+            choice_value(player["adapter"], MODEL_ADAPTERS, f"players.{name}.adapter")
         if "thinking" in player:
-            choice_value(player["thinking"], OPENAI_THINKING_MODES if name == "gpt" else DEEPSEEK_THINKING_MODES,
-                         f"players.{name}.thinking")
+            adapter = player.get("adapter", "openai" if name in ("red", "gpt") else "deepseek")
+            choices = OPENAI_THINKING_MODES if adapter == "openai" else DEEPSEEK_THINKING_MODES
+            choice_value(player["thinking"], choices, f"players.{name}.thinking")
+        # 合并 CLI 后还需按最终适配器再次校验。
     for key, value in app.items():
         if key == 'stream':
             if type(value) is not bool:
@@ -206,9 +224,9 @@ def load_config(path: Path = CONFIG_PATH, *, required: bool = False) -> dict:
     if result.get("log_dir") is not None:
         # 配置内的相对路径相对于配置所在目录；CLI 路径相对于工作目录。
         result["log_dir"] = path.resolve().parent / result["log_dir"]
-    for name in ("gpt", "deepseek"):
-        player = _table(players, name)
-        result[name] = {key: player.get(key) for key in _PLAYER}
+    for seat, old in (("red", "gpt"), ("blue", "deepseek")):
+        player = _table(players, old if legacy else seat)
+        result[seat] = {key: player.get(key) for key in _PLAYER}
     return {key: value for key, value in result.items() if value is not None}
 
 
@@ -223,16 +241,8 @@ def parser_defaults(config: dict) -> dict:
     for source, target in mapping.items():
         if source in config:
             defaults[target] = config[source]
-    if "gpt" in config:
-        player = config["gpt"]
-        for source, target in (("model", "openai_model"), ("base_url", "openai_base_url"),
-                               ("thinking", "openai_thinking"), ("api_key", "openai_api_key"), ("name", "openai_name")):
-            if player.get(source) is not None:
-                defaults[target] = player[source]
-    if "deepseek" in config:
-        player = config["deepseek"]
-        for source, target in (("model", "deepseek_model"), ("base_url", "deepseek_base_url"),
-                               ("thinking", "deepseek_thinking"), ("api_key", "deepseek_api_key"), ("name", "deepseek_name")):
-            if player.get(source) is not None:
-                defaults[target] = player[source]
+    for seat in ("red", "blue"):
+        for key, value in config.get(seat, {}).items():
+            if value is not None:
+                defaults[f"{seat}_{key}"] = value
     return defaults

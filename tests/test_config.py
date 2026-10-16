@@ -39,14 +39,14 @@ class ConfigTests(unittest.TestCase):
                             '[match]\nbest_of=9\n[players.gpt]\nmodel="gpt-5.6-sol"\nthinking="high"\n', encoding='utf-8')
             config = settings(path, ['--bo', '3', '--timeout', '45', '--openai-thinking', 'off'])
             self.assertEqual((config.best_of, config.timeout_seconds, config.max_output_tokens), (3, 45, 12000))
-            self.assertEqual(config.gpt.model, 'gpt-5.6-sol')
-            self.assertEqual(config.gpt.thinking, 'off')
+            self.assertEqual(config.red.model, 'gpt-5.6-sol')
+            self.assertEqual(config.red.thinking, 'off')
             self.assertIsNone(config.max_games)
-            self.assertEqual(config.deepseek.thinking, 'off')
+            self.assertEqual(config.blue.thinking, 'off')
             self.assertEqual(config.log_dir, folder / 'runs')
             self.assertEqual(settings(path, ['--log-dir', 'cli-runs']).log_dir, Path('cli-runs'))
-            self.assertEqual(settings(path, ['--openai-model', 'second']).gpt.display_name, 'second')
-            self.assertEqual(settings(path, ['--openai-model', 'second', '--openai-name', 'Display']).gpt.display_name, 'Display')
+            self.assertEqual(settings(path, ['--openai-model', 'second']).red.display_name, 'second')
+            self.assertEqual(settings(path, ['--openai-model', 'second', '--openai-name', 'Display']).red.display_name, 'Display')
 
     def test_unknown_types_ranges_and_future_mode_rejected(self):
         invalid = [
@@ -118,7 +118,7 @@ class ConfigTests(unittest.TestCase):
                 self.assertEqual(main(['--bo', '3']), 0)
             client.assert_not_called()
             run, = (root / 'logs').iterdir()
-            start = json.loads((run / '模拟玩家1/debug.log').read_text(encoding='utf-8').splitlines()[0])
+            start = json.loads((run / 'red/debug.log').read_text(encoding='utf-8').splitlines()[0])
             self.assertEqual((start['best_of'], start['max_games']), (3, 30))
 
     def test_sensitive_player_config_repr(self):
@@ -159,9 +159,9 @@ thinking="low"
                     self.assertEqual(body.get('max_tokens', body.get('max_completion_tokens')), 12345)
                     self.assertEqual(body['reasoning_effort'], 'high' if gpt else 'low')
                     ctx = json.loads(body['messages'][-1]['content'])
-                    self.assertEqual(ctx.get('player', ctx.get('state', {}).get('player')), 'GPT 显示名' if gpt else 'DeepSeek 显示名')
+                    self.assertEqual(ctx.get('player', ctx.get('state', {}).get('player')), 'Red · GPT 显示名' if gpt else 'Blue · DeepSeek 显示名')
                     if body['messages'][0]['content'] == REVIEW_PROMPT:
-                        self.assertEqual(ctx['match']['result']['wins'], {'GPT 显示名': 2, 'DeepSeek 显示名': 0})
+                        self.assertEqual(ctx['match']['result']['wins'], {'Red · GPT 显示名': 2, 'Blue · DeepSeek 显示名': 0})
                         content = {'assessment': '完成', 'key_moments': '第二局', 'improvements': key}
                     else:
                         if ctx['match']['game'] == 2:

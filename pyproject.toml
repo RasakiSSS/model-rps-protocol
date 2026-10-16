@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "model-rps-protocol"
-version = "0.2.0"
+version = "0.3.0"
 description = "A CLI rock-paper-scissors game between two independent language models."
 readme = "README.md"
 requires-python = ">=3.12"

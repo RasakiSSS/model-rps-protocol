@@ -4,7 +4,7 @@
 
 模型负责交流与决策，Python 裁判负责规则、信息隔离和胜负判定。项目用于观察模型在不同规则和提示词下的博弈行为，不预设模型必须聊天，也不把单场胜负当作模型能力排名。
 
-当前代码版本为 **0.2.0**，支持 GPT 与 DeepSeek 参数方案的 Chat Completions 兼容接口。默认同时行动、首次出拳锁定，另有允许改拳的对照模式和实验性轮流行动模式。支持可选流式响应，默认仍为非流式。
+当前代码版本为 **0.3.0**。Red、Blue 两个席位独立选择模型，支持同模型对战；现有适配器提供 OpenAI 与 DeepSeek 参数方案的 Chat Completions 兼容接口。默认同时行动、首次出拳锁定，另有允许改拳的对照模式和实验性轮流行动模式。支持可选流式响应，默认仍为非流式。
 
 ## 功能
 
@@ -12,10 +12,14 @@
 - **BO 比赛**：支持任意正奇数 BO，先达到目标胜局数即结束；平局继续，设有实际总局数上限。
 - **独立上下文**：同一场 BO 内保留各自历史，新比赛清空；结算前隐藏拳型。
 - **TOML 配置**：设置双方密钥、服务地址、模型、显示名、思考级别与比赛参数。
+- **Red / Blue 席位**：红蓝玩家标签，支持同模型、同地址、同密钥对战，各自上下文与日志独立。
+- **独立调试窗口**：Windows 下 `--debug` 另开只读命令行窗口，前台显示与普通模式一致。
 - **日志与复盘**：记录聊天、分析和调试信息；赛后公开正文分析，双方独立复盘。
 - **离线演示**：提供预设模拟玩家，无需 API key。
 
 完整规则与数据约定见 [项目协议 v0.2](model-rps-protocol-v0.2.md)。
+
+人类玩家、更多模型适配与自由聊天的后续设计见 [开发方向与设计讨论](ROADMAP.md)，其中标明当前已完成的阶段。
 
 ## 快速开始
 
@@ -67,13 +71,14 @@ macOS / Linux 使用 `cp config.example.toml config.toml`。也可以在文件�
 
 用文本编辑器打开新建的 `config.toml`，填写双方密钥，并按实际服务修改以下字段。仅复制模板仍无法运行真实比赛，因为模板中的密钥为空。
 
-| `[players.gpt]` 与 `[players.deepseek]` 下的字段 | 填写内容 |
+| `[players.red]` 与 `[players.blue]` 下的字段 | 填写内容 |
 | --- | --- |
+| `adapter` | `openai` 或 `deepseek`，选择请求参数方案；两席可选相同值 |
 | `api_key` | 对应服务提供的密钥，两方都需填写 |
 | `base_url` | API 基础地址，不包含末尾的 `/chat/completions` |
 | `model` | 该服务实际支持的模型标识 |
 | `thinking` | 当前适配器允许、且模型服务支持的思考级别 |
-| `name` | 可选显示名，省略时使用模型标识 |
+| `name` | 可选名称，显示为 `Red · 名称` 或 `Blue · 名称`；省略时使用模型标识 |
 
 模板中的 GPT 地址是第三方兼容服务，DeepSeek 地址是官方服务；它们是实验配置示例，不要求使用相同服务。更换服务时，应同时核对地址、模型标识与密钥。程序会在基础地址后追加 `/chat/completions`。
 
@@ -101,7 +106,7 @@ macOS / Linux 使用 `cp config.example.toml config.toml`。也可以在文件�
 | `[match]` | `best_of`、`max_games` | BO 正奇数、包含平局的实际总局数上限 |
 | `[match]` | `move_policy` | locked 锁定出拳 / revisable 允许改拳 |
 | `[match]` | `initiative` | simultaneous 同时行动 / alternating 轮流行动 |
-| `[players.gpt]`、`[players.deepseek]` | `model`、`base_url`、`api_key`、`thinking`、`name` | 双方模型与身份设置 |
+| `[players.red]`、`[players.blue]` | `adapter`、`model`、`base_url`、`api_key`、`thinking`、`name` | 双方适配器、模型与身份设置 |
 
 内置默认值为真实模式、BO1、同时行动、锁定出拳、双方思考 `off`、60 秒超时、1 秒重试间隔和 20,000 token 输出上限。模板覆盖部分设置：BO9、双方思考 `high`、120 秒超时。模型与服务地址以你填写的配置为准。
 
@@ -125,6 +130,16 @@ macOS / Linux 使用 `cp config.example.toml config.toml`。也可以在文件�
 
 未显式指定配置且当前目录没有 `config.toml` 时，程序使用内置默认值，不会生成文件。真实模式在没有 TOML 密钥时仍有旧版密钥文件回退逻辑；新用户若遇到 `local_secrets.py` 缺失提示，应按快速开始创建并填写 `config.toml`。
 
+### 同模型对战与旧配置
+
+将 Red 的 `adapter`、`model`、`base_url`、`api_key` 复制到 Blue，即可让同一个模型对战。双方可以共享密钥，仍会发起各自的请求。`thinking` 可相同或分别设置，`name` 可选；即使名称相同，Red / Blue 标签也能区分双方。
+
+两席都可选择 `openai` 或 `deepseek`，适配器决定思考和输出长度参数，不根据模型名称猜测。省略适配器时，Red 默认为 `openai`，Blue 默认为 `deepseek`；省略模型或地址时，使用所选适配器的内置值。已经填写的模型、地址不会因切换适配器而自动改写。
+
+命令行支持 `--red-adapter`、`--blue-adapter`，以及各席位的 `--red-model` / `--blue-model`、`--red-base-url` / `--blue-base-url`、`--red-thinking` / `--blue-thinking`、`--red-name` / `--blue-name`。密钥仍填写在本地配置中。
+
+旧 `[players.gpt]`、`[players.deepseek]` 分别兼容映射到 Red、Blue；旧 `--openai-*`、`--deepseek-*` 参数也是对应席位的别名。迁移时将两个配置节一起改为 `[players.red]`、`[players.blue]`，并分别添加 `adapter = "openai"`、`adapter = "deepseek"`。不能在同一文件中混用新旧玩家配置节。使用旧密钥文件时，按所选适配器取对应密钥。
+
 ## 流式响应
 
 在 `config.toml` 的 `[app]` 中设置 `stream = true`，或通过命令行临时启用：
@@ -135,7 +150,7 @@ macOS / Linux 使用 `cp config.example.toml config.toml`。也可以在文件�
 
 `--no-stream` 可临时恢复非流式。开关对双方的对局和复盘都生效，兼容同时行动、轮流行动及允许改拳模式；模拟玩家仍使用固定脚本，不产生流式网络请求。
 
-流式接收期间，默认不打印逐阶段进度；开启 `--debug` 后显示等待、接收思考或接收正文的状态。接口思考逐步写入各自的 `thought.log`，正文片段只写入私有 `debug.log`。收到正常结束标记并组装完整 JSON 后，才进行动作或复盘校验；即使某个中间片段看起来已经能解析，也不会提前发言、出拳或公开分析。
+流式接收期间，前台不打印逐阶段进度；开启 `--debug` 后在独立窗口显示等待、接收思考或接收正文的状态。接口思考逐步写入各自的 `thought.log`，正文片段只写入私有 `debug.log`。收到正常结束标记并组装完整 JSON 后，才进行动作或复盘校验；即使某个中间片段看起来已经能解析，也不会提前发言、出拳或公开分析。
 
 | 时限 | TOML 字段 | CLI 参数 | 默认值 |
 | --- | --- | --- | --- |
@@ -149,18 +164,27 @@ macOS / Linux 使用 `cp config.example.toml config.toml`。也可以在文件�
 
 ## 终端显示与调试模式
 
-默认隐藏 Tick / 行动 Tick / 结算 Tick 标题，以及流式请求的等待、思考接收和正文接收进度。查看这些信息时，在启动命令后加 `--debug`：
+Red 的玩家标签显示为红色，Blue 为蓝色；交换先手时颜色不变。日志、重定向输出和不支持颜色的终端保留纯文本标签；设置 `NO_COLOR` 环境变量可关闭颜色。
+
+**普通模式与 debug 模式的前台显示、交互一致。** Windows 下添加 `--debug` 会额外打开一个独立命令行窗口，显示 Tick、请求阶段、耗时、用量及错误和重试概况：
 
 ```powershell
 .\.venv\Scripts\python.exe -m model_rps --stream --debug --bo 3
 ```
 
-`--debug` 仅控制终端详细程度，不改变比赛规则、模型输入或日志记录，也不会在终端显示私有思考。聊天、提交与等待动作、截止提醒、重试和错误仍正常显示。Tick 标题仍写入 `chat.log`，请求进度仍写入各模型的 `debug.log`；无需开启调试模式即可保留完整日志。该开关是命令行参数，不需要添加到 TOML。
+调试窗口只读取本场日志，不会重复请求模型，关闭它不影响比赛。比赛结束后窗口保留内容，按 Enter 关闭。前台继续显示聊天、提交与等待、截止提醒、简短重试或错误、比分和复盘，不显示 Tick 标题或请求阶段。完整输入、正文和思考保留在私有日志，不在调试窗口逐片刷屏。
+
+无需开启调试模式即可保存全部五份日志。窗口启动失败时报告简短提示，比赛继续，诊断内容不会回退到前台。自动打开窗口目前仅支持 Windows；其他平台可自行在另一个终端运行以下只读查看器。`--debug` 仍只作为命令行参数，不加入 TOML。
+
+```powershell
+# 将路径替换为前台打印的本次运行目录；--once 仅读取现有记录
+.\.venv\Scripts\python.exe -m model_rps.debug_console "logs/本次运行目录" --once
+```
 
 两种显示模式都将双方拳型与结果合并为一行：
 
 ```text
-System：gpt-5.6-sol → 石头；deepseek-flash → 布；deepseek-flash 获胜。
+System：Red · gpt-5.6-sol → 石头；Blue · deepseek-flash → 布；Blue · deepseek-flash 获胜。
 ```
 
 平局和弃权也使用单行结算，未提交者显示“未出拳”；技术异常中止时不揭晓拳型。
@@ -193,7 +217,7 @@ System：gpt-5.6-sol → 石头；deepseek-flash → 布；deepseek-flash 获胜
 
 `alternating` 每次只请求一方，通过校验后立即公开发言和提交状态，另一方下次行动即可看到。它按固定次序轮流行动，不根据 API 返回速度决定先后手。
 
-- 第一局 GPT 席位先手，之后逐局交换，平局也交换。
+- 第一局 Red 先手，之后逐局交换，平局也交换；席位和颜色不交换。
 - 每方最多 20 次行动，全局最多 40 Tick；双方出拳齐全后，在当前完整响应处理后结算。
 - 每位玩家完成自己的第 10、18、19 次行动后提醒剩余次数；重试不消耗行动机会。
 - 仅支持 `locked`，配置为 `alternating + revisable` 会报错。
@@ -210,10 +234,10 @@ System：gpt-5.6-sol → 石头；deepseek-flash → 布；deepseek-flash 获胜
 
 双方独立设置思考级别，同一场 BO 的对局与复盘共用设置：
 
-| 配置字段 | 程序允许的值 | CLI 参数 |
+| 适配器 | 程序允许的 thinking 值 | 配置与 CLI |
 | --- | --- | --- |
-| `players.gpt.thinking` | off、low、medium、high、xhigh、max | `--openai-thinking` |
-| `players.deepseek.thinking` | off、low、high、max | `--deepseek-thinking` |
+| `openai` | off、low、medium、high、xhigh、max | 任一席位的 `thinking`；`--red-thinking` / `--blue-thinking` |
+| `deepseek` | off、low、high、max | 任一席位的 `thinking`；`--red-thinking` / `--blue-thinking` |
 
 这些是本项目适配器接受的选项，不代表所有模型和兼容服务都支持。接口拒绝参数时明确报错，不自动降级。仅更换 `model` 不会改变该席位的请求参数方案，接入不兼容模型需要调整适配器。
 
@@ -233,10 +257,10 @@ System：gpt-5.6-sol → 石头；deepseek-flash → 布；deepseek-flash 获胜
 ```text
 logs/日期时间_唯一编号/
 ├─ chat.log
-├─ 模型名1/
+├─ red/
 │  ├─ thought.log
 │  └─ debug.log
-└─ 模型名2/
+└─ blue/
    ├─ thought.log
    └─ debug.log
 ```
@@ -248,6 +272,8 @@ logs/日期时间_唯一编号/
 | `debug.log` | JSON Lines 格式的输入、响应、结构化事件、用量、耗时、错误与重试记录 |
 
 流式模式增加 `stream_delta`（文本片段）和 `stream_end`（完整或未完成的接收记录）。`thought.log` 连续保留思考的段落，结束后记录状态与用量，不重复打印整段思考。跨分片的已知密钥前缀会暂缓写入以完成脱敏；请求结束时仍不完整的前缀会被遮盖。用量缺失记为 `null`，不视为零。
+
+日志目录按席位固定，记录中仍包含玩家名称和实际请求的模型。更换模型、相同模型或相同昵称不会导致日志覆盖。旧版本日志保持原样，新的调试查看器读取上述 red / blue 目录结构。
 
 “通过校验”不等于“已执行”。同时行动时，若对手在该 Tick 失败，双方暂存动作都不执行；轮流行动时保留此前已完成的行动。以公开裁判记录判断实际结果。锁定后被忽略的 MOVE 在私有记录与赛后报告中单独标记为 `ignored_actions`。
 
@@ -279,8 +305,11 @@ model-rps-protocol/
 ├─ config.example.toml           无密钥的配置模板
 ├─ pyproject.toml                Python 版本、依赖与入口
 ├─ src/model_rps/
-│  ├─ __main__.py / cli.py       启动与命令行展示
+│  ├─ __main__.py / cli.py       启动参数与比赛流程组装
 │  ├─ config.py                  配置读取与校验
+│  ├─ player_factory.py          按席位创建独立玩家、兼容旧密钥文件
+│  ├─ console.py / terminal.py   前台展示、红蓝颜色
+│  ├─ debug_console.py           独立只读调试窗口
 │  ├─ game.py                    状态、动作与裁判规则
 │  ├─ runner.py / match.py       行动调度、重试与 BO 比赛
 │  ├─ players.py                 模型适配器与模拟玩家

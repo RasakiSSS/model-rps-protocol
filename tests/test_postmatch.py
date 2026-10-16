@@ -68,9 +68,9 @@ class PostmatchTests(unittest.TestCase):
                 review_calls.append((player, context))
                 review_attempts[player] += 1
                 self.assertEqual(payload.get("max_tokens", payload.get("max_completion_tokens")), 20000)
-                self.assertEqual(context["player"], payload["model"])
+                self.assertEqual(context["player"], ("Red · " if player == "A" else "Blue · ") + payload["model"])
                 report = context["match"]
-                self.assertEqual(report["result"]["wins"], {OPENAI.model: 2, DEEPSEEK.model: 0})
+                self.assertEqual(report["result"]["wins"], {"Red · " + OPENAI.model: 2, "Blue · " + DEEPSEEK.model: 0})
                 self.assertEqual(len(report["games"]), 2)
                 decisions = [d for g in report["games"] for d in g["decisions"]]
                 self.assertEqual(len(decisions), 8)
@@ -107,7 +107,7 @@ class PostmatchTests(unittest.TestCase):
             root, = (Path(directory) / "logs").iterdir()
             chat = (root / "chat.log").read_text(encoding="utf-8")
             self.assertLess(chat.index("赢得 BO3"), chat.index("赛后公开"))
-            for player in (OPENAI.model, DEEPSEEK.model):
+            for player in ("red", "blue"):
                 thoughts = [json.loads(s) for s in (root / f"{player}/debug.log").read_text(encoding="utf-8").splitlines()]
                 self.assertEqual(len([r for r in thoughts if r["kind"] == "decision"]), 4)
                 reviews = [r for r in thoughts if r["kind"] == "review"]
@@ -144,10 +144,10 @@ class PostmatchTests(unittest.TestCase):
             self.assertIn("deepseek-flash 复盘·整体评价", output.getvalue())
             self.assertNotIn("sensitive-server-body", output.getvalue())
             root, = (Path(directory) / "logs").iterdir()
-            rows = [json.loads(s) for s in (root / "gpt-6-luna/debug.log").read_text(encoding="utf-8").splitlines()]
+            rows = [json.loads(s) for s in (root / "red/debug.log").read_text(encoding="utf-8").splitlines()]
             result = next(r for r in rows if r["kind"] == "match_end")
-            self.assertEqual(result["wins"], {OPENAI.model: 1, DEEPSEEK.model: 0})
-            self.assertEqual(result["winner"], OPENAI.model)
+            self.assertEqual(result["wins"], {"Red · " + OPENAI.model: 1, "Blue · " + DEEPSEEK.model: 0})
+            self.assertEqual(result["winner"], "Red · " + OPENAI.model)
             self.assertFalse(next(r for r in rows if r["kind"] == "review_end")["complete"])
 
 

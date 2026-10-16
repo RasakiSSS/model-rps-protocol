@@ -53,7 +53,7 @@ class ThinkingConfigTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 configure_thinking(spec, mode)
         args = make_parser().parse_args([])
-        self.assertEqual((args.deepseek_thinking, args.openai_thinking), ("off", "off"))
+        self.assertEqual((args.blue_thinking, args.red_thinking), ("off", "off"))
 
 
 class ThinkingTests(unittest.IsolatedAsyncioTestCase):
@@ -95,11 +95,11 @@ class ThinkingTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(str(request.url), spec.base_url + "/chat/completions")
                 self.assertEqual(request.headers["authorization"],
                                  "Bearer test-key-b" if player == "A" else "Bearer test-key-a")
-                self.assertEqual(ctx.get("player", ctx.get("state", {}).get("player")), spec.model)
+                self.assertEqual(ctx.get("player", ctx.get("state", {}).get("player")), ("Red · " if player == "A" else "Blue · ") + spec.model)
                 self.assertNotIn("NATIVE-", json.dumps(body))
                 if body["messages"][0]["content"] == REVIEW_PROMPT:
                     self.assertEqual(len(bodies), 5 if player == "A" else 6)
-                    self.assertEqual(ctx["match"]["result"]["wins"], {OPENAI.model: 2, DEEPSEEK.model: 0})
+                    self.assertEqual(ctx["match"]["result"]["wins"], {"Red · " + OPENAI.model: 2, "Blue · " + DEEPSEEK.model: 0})
                     content = REVIEW
                 else:
                     if ctx["match"]["game"] == 2:
@@ -124,11 +124,11 @@ class ThinkingTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual("SUMMARY-A" in output.getvalue(), a_mode == "off")
                 if a_mode != "off" or b_mode != "off":
                     self.assertIn("未提供正文分析", output.getvalue())
-                self.assertIn(f"参赛模型：{OPENAI.model} vs {DEEPSEEK.model}", output.getvalue())
+                self.assertIn(f"参赛模型：Red · {OPENAI.model} vs Blue · {DEEPSEEK.model}", output.getvalue())
                 root, = (path / "logs").iterdir()
-                for player, mode in ((OPENAI.model, a_mode), (DEEPSEEK.model, b_mode)):
-                    rows = [json.loads(s) for s in (root / f"{player}/debug.log").read_text(encoding="utf-8").splitlines()]
-                    readable = (root / f"{player}/thought.log").read_text(encoding="utf-8")
+                for directory, player, mode in (("red", OPENAI.model, a_mode), ("blue", DEEPSEEK.model, b_mode)):
+                    rows = [json.loads(s) for s in (root / f"{directory}/debug.log").read_text(encoding="utf-8").splitlines()]
+                    readable = (root / f"{directory}/thought.log").read_text(encoding="utf-8")
                     self.assertEqual("NATIVE-" in readable, mode != "off")
                     self.assertIn("赛后复盘", readable)
                     native = [r for r in rows if r["kind"] == "reasoning"]
@@ -141,10 +141,10 @@ class ThinkingTests(unittest.IsolatedAsyncioTestCase):
                     if native:
                         self.assertEqual([r["phase"] for r in native], ["game", "game", "review"])
                         self.assertTrue(all(r["status"] == "returned" and "[REDACTED]" in r["content"] for r in native))
-                    debug = [json.loads(s) for s in (root / f"{player}/debug.log").read_text(encoding="utf-8").splitlines()]
-                    self.assertEqual(next(r for r in debug if r["kind"] == "match_start")["thinking"], {OPENAI.model: a_mode, DEEPSEEK.model: b_mode})
+                    debug = [json.loads(s) for s in (root / f"{directory}/debug.log").read_text(encoding="utf-8").splitlines()]
+                    self.assertEqual(next(r for r in debug if r["kind"] == "match_start")["thinking"], {"Red · " + OPENAI.model: a_mode, "Blue · " + DEEPSEEK.model: b_mode})
                     self.assertEqual(next(r for r in debug if r["kind"] == "match_start")["players"],
-                                     {OPENAI.model: OPENAI.model, DEEPSEEK.model: DEEPSEEK.model})
+                                     {"Red · " + OPENAI.model: "Red · " + OPENAI.model, "Blue · " + DEEPSEEK.model: "Blue · " + DEEPSEEK.model})
                     self.assertTrue(all(r["model"] == player
                                         for r in debug if r["kind"] == "request_config"))
                     self.assertEqual(len([r for r in debug if r["kind"] == "request_config"]), 3)

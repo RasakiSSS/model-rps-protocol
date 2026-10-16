@@ -17,16 +17,21 @@ best_of = 9                          # 正奇数，BO9 先胜5局
 # max_games = 90                     # 省略时按最终 best_of 的10倍计算，平局也计入
 initiative = "simultaneous"          # alternating 为实验性轮流行动，仅支持 locked
 
-[players.gpt]
+[players.red]
+adapter = "openai"                  # openai / deepseek；决定请求参数，与席位无关
 model = "gpt-5.6-sol"
-# name = "GPT-5.6 Sol"               # 可选显示名；省略时随 model 自动变化
+# name = "GPT-5.6 Sol"               # 显示为 Red · 名称；省略时使用 model
 base_url = "https://ai.yuhuantin.icu/v1"
 api_key = ""                         # 填写该服务的密钥
 thinking = "high"                    # off / low / medium / high / xhigh / max
 
-[players.deepseek]
+[players.blue]
+adapter = "deepseek"                # 两席可使用完全相同的 adapter、model、地址和密钥
 model = "deepseek-flash"
 # name = "DeepSeek"
 base_url = "https://api.deepseek.com"
 api_key = ""
 thinking = "high"                    # off / low / high / max
+
+# 同模型对战：将 red 的 adapter、model、base_url、api_key 复制到 blue。
+# thinking 可以相同，也可以分别设置；双方始终保持独立历史和日志。

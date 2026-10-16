@@ -1,13 +1,11 @@
-"""将裁判内部的席位标识转换为模型名；不改写玩家生成的自然语言。"""
-
-import hashlib
-import re
+"""裁判席位与 Red / Blue 展示身份；不改写玩家生成的自然语言。"""
 
 
 def player_names(first: str, second: str) -> dict[str, str]:
-    if first.casefold() == second.casefold():
-        return {"A": f"{first}（玩家1）", "B": f"{second}（玩家2）"}
-    return {"A": first, "B": second}
+    return {"A": f"Red · {first}", "B": f"Blue · {second}"}
+
+
+SEAT_DIRECTORIES = {"A": "red", "B": "blue"}
 
 
 def named_data(value, names: dict[str, str], field: str | None = None):
@@ -21,17 +19,3 @@ def named_data(value, names: dict[str, str], field: str | None = None):
     if field in ("player", "winner", "first_player") and isinstance(value, str):
         return names.get(value, value)
     return value
-
-
-def log_directory(name: str) -> str:
-    """模型标识可能含路径分隔符；目录始终是一个合法的本地文件名。"""
-    safe = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", name).rstrip(" .")
-    reserved = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)),
-                *(f"LPT{i}" for i in range(1, 10))}
-    if not safe or safe.split(".")[0].upper() in reserved:
-        safe = "model_" + safe
-    if len(safe) > 100:
-        safe = safe[:100]
-    if safe != name:
-        safe += "_" + hashlib.sha256(name.encode("utf-8")).hexdigest()[:10]
-    return safe

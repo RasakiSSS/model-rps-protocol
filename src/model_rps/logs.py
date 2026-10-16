@@ -8,7 +8,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from .diagnostics import LogError
-from .identities import log_directory, named_data
+from .identities import SEAT_DIRECTORIES, named_data
 
 
 class RunLogs:
@@ -27,7 +27,7 @@ class RunLogs:
             self.path.mkdir(parents=True, exist_ok=False)
             self._files["chat"] = self._open(self.path / "chat.log")
             for player in ("A", "B"):
-                directory = self.path / (log_directory(self.names[player]) if self.names else f"player_{player.lower()}")
+                directory = self.path / SEAT_DIRECTORIES[player]
                 directory.mkdir()
                 for name in ("thought", "debug"):
                     self._files[player, name] = self._open(directory / f"{name}.log")

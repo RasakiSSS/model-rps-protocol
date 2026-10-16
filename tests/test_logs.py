@@ -39,7 +39,7 @@ class LogTests(unittest.TestCase):
                              "content": "第一段 secret-key\n\n第二段\r\n伪标题\x1b[2J"})
             logs.request(2, {**base, "kind": "decision", "status": "validated", "analysis_source": "reasoning",
                              "summary": None, "actions": [{"type": "MOVE", "move": "Paper"}]})
-            text = (logs.path / "模型甲/thought.log").read_text(encoding="utf-8")
+            text = (logs.path / "red/thought.log").read_text(encoding="utf-8")
             self.assertIn("第 2 局 · Tick 3 · 第 2 次请求 · 接口思考", text)
             self.assertIn("模型：模型甲", text)
             self.assertIn("    第一段 [REDACTED]\n    \n    第二段\n    伪标题\\u001b[2J", text)
@@ -49,11 +49,11 @@ class LogTests(unittest.TestCase):
             self.assertIn("MOVE · 出拳：布（Paper）", text)
             self.assertIn("动作是否执行", text)
             self.assertIn("正文策略分析：未提供", text)
-            debug = records(logs.path / "模型甲/debug.log")
+            debug = records(logs.path / "red/debug.log")
             self.assertEqual([r["kind"] for r in debug], ["reasoning", "decision"])
             self.assertEqual(debug[0]["content"], "第一段 [REDACTED]\n\n第二段\r\n伪标题\x1b[2J")
             self.assertIsNone(debug[1]["summary"])
-            self.assertEqual((logs.path / "模型乙/thought.log").read_text(encoding="utf-8"), "")
+            self.assertEqual((logs.path / "blue/thought.log").read_text(encoding="utf-8"), "")
 
     def test_readable_missing_reasoning_and_failed_review_are_explicit(self):
         with tempfile.TemporaryDirectory() as directory, RunLogs(Path(directory)) as logs:
@@ -62,7 +62,7 @@ class LogTests(unittest.TestCase):
                              "reasoning_tokens": None, "finish_reason": "length", "content": None})
             logs.request(0, {**base, "kind": "request_end", "status": "rejected", "error": "模型输出未完整结束",
                              "correction": "请重新返回完整复盘 JSON。", "will_retry": False})
-            text = (logs.path / "player_b/thought.log").read_text(encoding="utf-8")
+            text = (logs.path / "blue/thought.log").read_text(encoding="utf-8")
             self.assertIn("赛后复盘 · 第 3 次请求", text)
             self.assertIn("接口未返回思考文本", text)
             self.assertIn("思考 token：未提供", text)
@@ -78,25 +78,25 @@ class LogTests(unittest.TestCase):
             self.assertEqual(status, 0)
             root, = Path(directory).iterdir()
             self.assertEqual({str(path.relative_to(root)).replace("\\", "/") for path in root.rglob("*.log")},
-                             {"chat.log", "模拟玩家1/thought.log", "模拟玩家1/debug.log",
-                              "模拟玩家2/thought.log", "模拟玩家2/debug.log"})
+                             {"chat.log", "red/thought.log", "red/debug.log",
+                              "blue/thought.log", "blue/debug.log"})
             chat = (root / "chat.log").read_text(encoding="utf-8")
             self.assertIn("第 2 局开始", chat)
             self.assertNotIn("第 3 局开始", chat)
-            self.assertIn("比分 模拟玩家1 0 : 2 模拟玩家2", chat)
+            self.assertIn("比分 Red · 模拟玩家1 0 : 2 Blue · 模拟玩家2", chat)
             self.assertIn("赢得 BO3", chat)
             self.assertNotIn("预设动作", chat.split("赛后公开")[0])
             self.assertIn("预设动作", chat.split("赛后公开")[1])
             self.assertIn("赛后复盘结束", chat)
-            for player in ("模拟玩家1", "模拟玩家2"):
+            for player in ("red", "blue"):
                 debug = records(root / f"{player}/debug.log")
                 result = next(r for r in debug if r["kind"] == "match_end")
-                self.assertEqual(result["wins"], {"模拟玩家1": 0, "模拟玩家2": 2})
+                self.assertEqual(result["wins"], {"Red · 模拟玩家1": 0, "Blue · 模拟玩家2": 2})
                 self.assertEqual(result["games_played"], 2)
                 thought = [r for r in debug if r["kind"] in ("decision", "review")]
                 self.assertEqual({r["game"] for r in thought if r["kind"] == "decision"}, {1, 2})
                 self.assertEqual(len([r for r in thought if r["kind"] == "review"]), 1)
-                self.assertTrue(all(r["player"] == player for r in thought))
+                self.assertTrue(all(r["player"] == ("Red · 模拟玩家1" if player == "red" else "Blue · 模拟玩家2") for r in thought))
                 readable = (root / f"{player}/thought.log").read_text(encoding="utf-8")
                 self.assertIn("第 2 局 · Tick", readable)
                 self.assertIn("赛后复盘 · 第 1 次请求 · 复盘结果", readable)
@@ -110,7 +110,7 @@ class LogTests(unittest.TestCase):
                                   "status": 401, "body": "secret-a secret-b"})
                 # 尚未关闭文件时已经能够从磁盘读取。
                 self.assertIn("[REDACTED]", (first.path / "chat.log").read_text(encoding="utf-8"))
-                self.assertEqual(records(first.path / "player_a/debug.log")[0]["body"],
+                self.assertEqual(records(first.path / "red/debug.log")[0]["body"],
                                  "[REDACTED] [REDACTED]")
             with RunLogs(Path(directory)) as second:
                 self.assertNotEqual(first.path, second.path)
@@ -133,7 +133,7 @@ class LogTests(unittest.TestCase):
             with RunLogs(Path(directory), secrets=(secret,)) as logs:
                 logs.request(1, {"kind": "http_response", "player": "A", "tick": 1, "attempt": 1,
                                  "body": json.dumps({"echo": secret}), "plain": secret})
-                record, = records(logs.path / "player_a/debug.log")
+                record, = records(logs.path / "red/debug.log")
                 self.assertEqual(record["plain"], "[REDACTED]")
                 self.assertEqual(json.loads(record["body"])["echo"], "[REDACTED]")
 
@@ -179,18 +179,18 @@ class AsyncLogTests(unittest.IsolatedAsyncioTestCase):
                                                ChatCompletionPlayer(client, OPENAI, "secret-b"), policy=FAST,
                                                on_request=lambda r: logs.request(1, r), on_event=console.event, move_policy=MovePolicy.REVISABLE)
                 self.assertEqual(state.result.winner, "A")
-                a = records(logs.path / "player_a/debug.log")
-                b = records(logs.path / "player_b/debug.log")
+                a = records(logs.path / "red/debug.log")
+                b = records(logs.path / "blue/debug.log")
                 self.assertEqual([(r["tick"], r["attempt"]) for r in a if r["kind"] == "request_start"],
                                  [(1, 1), (1, 2), (1, 3), (2, 1)])
                 self.assertEqual([(r["tick"], r["attempt"]) for r in b if r["kind"] == "request_start"], [(1, 1), (2, 1)])
                 self.assertEqual([r["status"] for r in a if r["kind"] == "http_response"], [429, 200, 200, 200])
-                self.assertTrue(all(r["game"] == 1 and r["tick"] in (1, 2) and r["player"] == "A" for r in a))
+                self.assertTrue(all(r["game"] == 1 and r["tick"] in (1, 2) and r["player"] == "A" for r in a if r["kind"] != "tick"))
                 self.assertTrue(all(r["elapsed_seconds"] >= 0 for r in a if r["kind"] == "request_end"))
                 self.assertEqual([r["usage"] for r in b if r["kind"] == "usage"],
                                  [{"prompt_tokens": 100, "completion_tokens": 25}] * 2)
                 self.assertIn("decision_summary", next(r for r in a if r["kind"] == "request_start" and r["attempt"] == 3)["correction"])
-                thoughts = (logs.path / "player_a/thought.log").read_text(encoding="utf-8")
+                thoughts = (logs.path / "red/thought.log").read_text(encoding="utf-8")
                 self.assertEqual(thoughts.count("· 请求未完成"), 2)
                 self.assertEqual(thoughts.count("· 策略分析与行动"), 2)
                 self.assertIn("PRIVATE-DECISION", thoughts)
@@ -228,8 +228,8 @@ class AsyncLogTests(unittest.IsolatedAsyncioTestCase):
             task.cancel()
             with self.assertRaises(asyncio.CancelledError):
                 await task
-            for player in ("a", "b"):
-                debug = records(logs.path / f"player_{player}/debug.log")
+            for player in ("red", "blue"):
+                debug = records(logs.path / f"{player}/debug.log")
                 self.assertEqual(next(r for r in debug if r["kind"] == "request_end")["status"], "cancelled")
                 self.assertEqual(debug[-1]["status"], "interrupted")
             self.assertIn("运行中断", (logs.path / "chat.log").read_text(encoding="utf-8"))

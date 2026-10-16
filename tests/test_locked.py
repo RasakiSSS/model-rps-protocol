@@ -89,7 +89,7 @@ class LockedRulesTests(unittest.TestCase):
                 status = main(["--no-config", "--mode", "demo", "--max-games", "1", "--log-dir", directory, *options])
                 self.assertEqual(status, 0)
                 root, = Path(directory).iterdir()
-                rows = [json.loads(s) for s in (root / "模拟玩家1/debug.log").read_text(encoding="utf-8").splitlines()]
+                rows = [json.loads(s) for s in (root / "red/debug.log").read_text(encoding="utf-8").splitlines()]
                 self.assertEqual(next(r for r in rows if r["kind"] == "game_end")["completed_ticks"], expected_tick)
                 self.assertTrue(next(r for r in rows if r["kind"] == "review_end")["complete"])
         with tempfile.TemporaryDirectory() as directory, contextlib.redirect_stderr(io.StringIO()):
@@ -185,7 +185,7 @@ class LockedFlowTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(reviews), 2)
             self.assertNotIn("结算 Tick", output.getvalue())
             root, = (path / "logs").iterdir()
-            rows = [json.loads(s) for s in (root / "gpt-6-luna/debug.log").read_text(encoding="utf-8").splitlines()]
+            rows = [json.loads(s) for s in (root / "red/debug.log").read_text(encoding="utf-8").splitlines()]
             self.assertEqual(next(r for r in rows if r["kind"] == "match_start")["move_policy"], "locked")
 
 
