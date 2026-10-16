@@ -18,7 +18,7 @@ _SECTIONS = {"app", "match", "players"}
 _APP = {"mode", "log_dir", "timeout_seconds", "retry_delay_seconds", "max_output_tokens",
         "stream", "stream_first_timeout_seconds", "stream_idle_timeout_seconds"}
 _MATCH = {"move_policy", "best_of", "max_games", "initiative"}
-_PLAYER = {"adapter", "name", "model", "base_url", "api_key", "thinking", "analysis"}
+_PLAYER = {"type", "adapter", "name", "model", "base_url", "api_key", "thinking", "analysis"}
 
 
 def text_value(value, location: str, *, empty: bool = False) -> None:
@@ -65,10 +65,11 @@ class PlayerConfig:
     api_key: str | None = field(default=None, repr=False)
     adapter: str = "openai"
     analysis: str = "required"
+    type: str = "llm"
 
     @property
     def display_name(self) -> str:
-        return self.name or self.model
+        return self.name or ("玩家" if self.type == "human" else self.model)
 
 
 @dataclass(frozen=True)
@@ -115,6 +116,8 @@ class RuntimeConfig:
                 raise ValueError("max_games 不能小于目标胜局数。")
         players = []
         for prefix in ("red", "blue"):
+            kind = getattr(args, f"{prefix}_type")
+            choice_value(kind, ("llm", "human"), f"{prefix}.type")
             adapter = getattr(args, f"{prefix}_adapter")
             choice_value(adapter, MODEL_ADAPTERS, f"{prefix}.adapter")
             spec = MODEL_ADAPTERS[adapter]
@@ -132,11 +135,13 @@ class RuntimeConfig:
                     raise ValueError("显示名称不能使用裁判保留的 A/B 标识。")
             if model in ("A", "B") and name is None:
                 raise ValueError("此模型标识需要设置独立的显示名称。")
-            if key is not None:
+            if key is not None and kind != "human":
                 text_value(key, f"{prefix}.api_key", empty=args.mode == "demo")
-            analysis = getattr(args, f"{prefix}_analysis")
+            analysis = getattr(args, f"{prefix}_analysis") or ("optional" if kind == "human" else "required")
             choice_value(analysis, tuple(AnalysisPolicy), f"{prefix}.analysis")
-            players.append(PlayerConfig(model, url, thinking, name, key, adapter, analysis))
+            players.append(PlayerConfig(model, url, thinking, name, key, adapter, analysis, kind))
+        if sum(player.type == "human" for player in players) > 1:
+            raise ValueError("一个终端目前只支持一位人类玩家，请将另一席位设为 llm。")
         return cls(args.mode, args.timeout, args.retry_delay, args.max_output_tokens, Path(args.log_dir),
                    args.bo, args.max_games, args.move_policy, args.initiative, *players,
                    args.stream, args.stream_first_timeout, args.stream_idle_timeout)
@@ -189,6 +194,8 @@ def load_config(path: Path = CONFIG_PATH, *, required: bool = False) -> dict:
             url_value(player["base_url"], f"players.{name}.base_url")
         if "adapter" in player:
             choice_value(player["adapter"], MODEL_ADAPTERS, f"players.{name}.adapter")
+        if "type" in player:
+            choice_value(player["type"], ("llm", "human"), f"players.{name}.type")
         if "analysis" in player:
             choice_value(player["analysis"], tuple(AnalysisPolicy), f"players.{name}.analysis")
         if "thinking" in player:

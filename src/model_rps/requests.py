@@ -37,8 +37,44 @@ class TurnFailed(Exception):
         self.player = view.player
 
 
+@dataclass(frozen=True)
+class RequestResult:
+    view: PlayerView
+    interaction: Interaction
+
+
+def validated_response(player, view, raw, *, has_reasoning=False) -> RequestResult:
+    """人类与模型共用阶段、分析与行动校验，并产生相同的诊断记录。"""
+    trace("raw_response", content=raw)
+    interaction = parse_interaction(raw, can_act=view.can_act,
+                                    analysis=getattr(player, "analysis_policy", AnalysisPolicy.REQUIRED))
+    decision = interaction.decision
+    if decision is not None:
+        validate_turn(decision.actions, view.own_move, view.move_policy)
+        trace("decision", summary=decision.summary, status="validated",
+              analysis_source="analyze" if decision.summary is not None else "none",
+              has_reasoning=has_reasoning,
+              actions=[action.to_dict() for action in decision.actions
+                       if not ignored_move(action, view.own_move, view.move_policy)],
+              ignored_actions=[action.to_dict() for action in decision.actions
+                               if ignored_move(action, view.own_move, view.move_policy)])
+    else:
+        trace("chat_validated", message_count=len(interaction.messages))
+    return RequestResult(view, interaction)
+
+
 async def request_interaction(player: Player, view: PlayerView, policy: RequestPolicy,
-                           emit: EventHandler, on_request: TraceHandler | None) -> Interaction:
+                           emit: EventHandler, on_request: TraceHandler | None) -> RequestResult:
+    if getattr(player, "interactive", False):
+        # 输入错误在终端逐条提示；等待用户不使用 API 超时或重试预算。
+        submission = await player.respond(view)
+        view = submission.view
+        with request_trace(on_request, player=view.player, tick=view.tick, attempt=1,
+                           phase="game" if view.can_act else "chat", request_id=view.request_id):
+            trace("request_start", state=view.to_dict(), correction=None, source="human")
+            result = validated_response(player, view, submission.content)
+            trace("request_end", status="valid", source="human")
+            return result
     feedback = None
     for attempt in range(1, MAX_ATTEMPTS + 1):
         with request_trace(on_request, player=view.player, tick=view.tick, attempt=attempt,
@@ -52,23 +88,9 @@ async def request_interaction(player: Player, view: PlayerView, policy: RequestP
                     response = await player.respond(view, feedback)
                 raw = response.content if isinstance(response, ModelResponse) else response
                 has_reasoning = isinstance(response, ModelResponse) and response.has_reasoning
-                trace("raw_response", content=raw)
-                interaction = parse_interaction(raw, can_act=view.can_act,
-                                                analysis=getattr(player, "analysis_policy", AnalysisPolicy.REQUIRED))
-                decision = interaction.decision
-                if decision is not None:
-                    validate_turn(decision.actions, view.own_move, view.move_policy)
-                    trace("decision", summary=decision.summary, status="validated",
-                          analysis_source="analyze" if decision.summary is not None else "none",
-                          has_reasoning=has_reasoning,
-                          actions=[action.to_dict() for action in decision.actions
-                                   if not ignored_move(action, view.own_move, view.move_policy)],
-                          ignored_actions=[action.to_dict() for action in decision.actions
-                                           if ignored_move(action, view.own_move, view.move_policy)])
-                else:
-                    trace("chat_validated", message_count=len(interaction.messages))
+                result = validated_response(player, view, raw, has_reasoning=has_reasoning)
                 trace("request_end", status="valid", elapsed_seconds=perf_counter() - started)
-                return interaction
+                return result
             except LogError:
                 raise
             except asyncio.CancelledError:

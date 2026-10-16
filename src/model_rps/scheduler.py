@@ -48,7 +48,9 @@ class GameSession:
     def _dispatch(self):
         # 行动机会同时消化所有未读消息，不为同一批消息额外安排聊天请求。
         for identity, player in self.players.items():
-            if identity in self.pending:
+            interactive = getattr(player, "interactive", False)
+            pending = self.pending.get(identity)
+            if pending is not None and not interactive:
                 continue
             can_act = self._needs_action(identity)
             reasons = sorted(self.wake_reasons[identity])
@@ -56,18 +58,25 @@ class GameSession:
                 reasons.append("action_available")
             if self.inboxes[identity]:
                 reasons.append("opponent_say")
-            if not reasons:
+            if not reasons and not interactive:
                 continue
             view = self.state.view_for(identity)
             own_move = view.own_move
             for action in self.held.get(identity, ()):
                 if action.kind == ActionKind.MOVE and not ignored_move(action, own_move, view.move_policy):
                     own_move = action.move
-            self.serial += 1
-            view = replace(view, can_act=can_act, own_move=own_move, request_id=self.serial,
+            if pending is None:
+                self.serial += 1
+            view = replace(view, can_act=can_act, own_move=own_move,
+                           request_id=pending.view.request_id if pending else self.serial,
                            notifications=tuple(self.inboxes[identity]), request_reasons=tuple(reasons))
             self.inboxes[identity].clear()
             self.wake_reasons[identity].clear()
+            if interactive:
+                player.update_view(view)
+            if pending is not None:
+                pending.view = view
+                continue
             checkpoint = getattr(player, "checkpoint_history", lambda: None)()
             task = asyncio.create_task(request_interaction(player, view, self.policy, self.emit, self.on_request))
             self.pending[identity] = PendingRequest(view, task, checkpoint)
@@ -156,7 +165,7 @@ class GameSession:
                     identity = request.view.player
                     del self.pending[identity]
                     try:
-                        interaction = request.task.result()
+                        response = request.task.result()
                     except TurnFailed as exc:
                         if request.view.can_act:
                             self.state = abort(self.state, identity, f"{exc} 本局中止。")
@@ -166,7 +175,8 @@ class GameSession:
                             self.emit(Event(self.state.completed_ticks + 1, "chat_error", identity,
                                             f"聊天请求未完成，本次跳过：{exc}"))
                     else:
-                        self._accept(request, interaction)
+                        request.view = response.view
+                        self._accept(request, response.interaction)
                     if self.state.result is not None:
                         break
             return self.state

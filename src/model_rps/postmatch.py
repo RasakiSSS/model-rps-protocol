@@ -81,7 +81,7 @@ async def _request(player: MatchPlayer, context: dict, policy: RequestPolicy,
             trace("request_start", context=deepcopy(context), correction=feedback)
             retryable = True
             try:
-                async with asyncio.timeout(policy.timeout):
+                async with asyncio.timeout(None if getattr(player, "interactive", False) else policy.timeout):
                     raw = await player.postmatch(deepcopy(context), feedback)
                 trace("raw_response", content=raw)
                 response = parse_postmatch(raw)
@@ -153,11 +153,14 @@ async def run_postmatch(players: tuple[MatchPlayer, MatchPlayer], report: dict, 
     try:
         while not all(exited.values()):
             for identity, player in seats.items():
+                if getattr(player, "interactive", False) and identity in pending:
+                    player.update_postmatch({"exited": dict(exited)})
                 if exited[identity] or identity in pending:
                     continue
                 updates = events[cursors[identity]:]
                 peer_exited = exited["B" if identity == "A" else "A"]
-                if identity in invited and not peer_exited and not any(e["player"] != identity for e in updates):
+                if (not getattr(player, "interactive", False) and identity in invited and not peer_exited
+                        and not any(e["player"] != identity for e in updates)):
                     continue
                 serial += 1
                 context = {"player": identity, "request_id": serial, "events": deepcopy(updates),

@@ -4,11 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "model-rps-protocol"
-version = "0.5.0"
-description = "A CLI rock-paper-scissors game between two independent language models."
+version = "0.6.0"
+description = "A CLI rock-paper-scissors game for human and language-model players."
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = ["httpx>=0.28,<1"]
+dependencies = ["httpx>=0.28,<1", "prompt-toolkit>=3.0.52,<4"]
 
 [project.scripts]
 model-rps = "model_rps.cli:main"

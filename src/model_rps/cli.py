@@ -13,7 +13,9 @@ import httpx
 from .game import MovePolicy
 from .console import Console, display_text
 from .debug_console import open_debug_window
-from .player_factory import load_keys, model_players
+from .player_factory import load_keys, model_players, player_keys
+from .human import HumanPlayer
+from .human_terminal import HumanTerminal, UserInterrupted
 from .config import CONFIG_PATH, RuntimeConfig, load_config, parser_defaults
 from .diagnostics import LogError
 from .logs import RunLogs
@@ -26,7 +28,7 @@ from .runner import RequestPolicy
 
 
 def make_parser(config: dict | None = None) -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Model RPS：两个独立模型的猜拳博弈",
+    parser = argparse.ArgumentParser(description="Model RPS：模型对战与人类 CLI 猜拳",
                                      epilog="优先级：命令行 > TOML > 内置值。以下默认值指内置值；配置可覆盖。")
     source = parser.add_mutually_exclusive_group()
     source.add_argument("--config", type=Path, help="TOML 配置文件，默认读取工作目录的 config.toml")
@@ -38,8 +40,8 @@ def make_parser(config: dict | None = None) -> argparse.ArgumentParser:
                         help="locked 提交后锁定（默认）；revisable 允许改拳，下一 Tick 结算")
     parser.add_argument("--scenario", choices=("locked", "change", "settlement", "draw", "forfeit", "deadline", "retry", "chat"),
                         help="模拟场景，默认随出拳规则选择 locked 或 change")
-    parser.add_argument("--secrets-file", type=Path, help="兼容旧版：用指定 Python 文件中的两个密钥覆盖 TOML 密钥")
-    parser.add_argument("--timeout", type=float, default=RequestPolicy().timeout, help="每次请求的总超时秒数")
+    parser.add_argument("--secrets-file", type=Path, help="兼容旧版：从指定 Python 文件读取模型席位所需密钥，覆盖 TOML 密钥")
+    parser.add_argument("--timeout", type=float, default=RequestPolicy().timeout, help="每次模型请求的总超时秒数；不限制人类输入等待")
     parser.add_argument('--stream', action=argparse.BooleanOptionalAction, default=False,
                         help='启用流式响应；--no-stream 使用非流式（默认），对局与赛后聊天共用')
     parser.add_argument('--stream-first-timeout', type=float, default=60, help='流式首包等待上限秒数，默认 60')
@@ -52,10 +54,12 @@ def make_parser(config: dict | None = None) -> argparse.ArgumentParser:
     parser.add_argument("--max-games", type=int, help="包含平局的实际总局数上限，默认 10×BO")
     parser.add_argument("--log-dir", type=Path, default=Path("logs"), help="日志根目录，默认 logs")
     for seat, old, adapter in (("red", "openai", "openai"), ("blue", "deepseek", "deepseek")):
+        parser.add_argument(f"--{seat}-type", choices=("llm", "human"), default="llm",
+                            help=f"{seat.title()} 玩家类型；一个终端最多一位 human，其余使用 llm")
         parser.add_argument(f"--{seat}-adapter", choices=tuple(MODEL_ADAPTERS), default=adapter,
                             help=f"{seat.title()} 使用的请求参数方案，与模型名和席位无关")
-        parser.add_argument(f"--{seat}-analysis", choices=tuple(AnalysisPolicy), default="required",
-                            help=f"{seat.title()} 的策略分析：off 关闭、optional 可选、required 必填")
+        parser.add_argument(f"--{seat}-analysis", choices=tuple(AnalysisPolicy), default=None,
+                            help=f"{seat.title()} 的策略分析：off/optional/required；人类默认 optional，模型默认 required")
         for key in ("base-url", "model", "name", "thinking"):
             parser.add_argument(f"--{seat}-{key}", f"--{old}-{key}", dest=f"{seat}_{key.replace('-', '_')}",
                                 default="off" if key == "thinking" else None,
@@ -71,10 +75,13 @@ async def play(args: argparse.Namespace) -> int:
     if args.secrets_file is not None:
         args = argparse.Namespace(**{**vars(args), "red_api_key": None, "blue_api_key": None})
     settings = RuntimeConfig.from_args(args)
+    if any(player.type == "human" for player in settings.seats) and not (sys.stdin.isatty() and sys.stdout.isatty()):
+        raise ValueError("人类玩家需要交互终端，请在 PowerShell 或终端窗口中运行，不要重定向标准输入或输出。")
     policy = RequestPolicy(timeout=settings.timeout_seconds,
                            retry_delay=0 if settings.mode == "demo" else settings.retry_delay_seconds)
     config = MatchConfig(settings.best_of, settings.max_games, MovePolicy(settings.move_policy), settings.initiative)
-    thinking = {"A": settings.red.thinking, "B": settings.blue.thinking}
+    thinking = {seat: player.thinking if player.type == "llm" else "off"
+                for seat, player in zip(("A", "B"), settings.seats)}
     if settings.mode == "demo" and any(mode != "off" for mode in thinking.values()):
         raise ValueError("思考开关仅用于真实模型；demo 使用预设脚本，请保持双方思考为 off。")
     scenario = args.scenario or ("locked" if config.move_policy == MovePolicy.LOCKED else "change")
@@ -83,14 +90,21 @@ async def play(args: argparse.Namespace) -> int:
 
     async def execute(factory, names, logs):
         console = Console(names, logs)
+        players = factory()
+        for identity, player in zip(("A", "B"), players):
+            if getattr(player, "interactive", False):
+                terminal = HumanTerminal(player, identity, console)
+                return await terminal.run(execute_match(players, console, names, logs))
+        return await execute_match(players, console, names, logs)
+
+    async def execute_match(players, console, names, logs):
         if args.debug:
             open_debug_window(logs)
-        players = factory()
         archive = MatchArchive()
-        print(f"日志目录：{display_text(str(logs.path.resolve()))}", flush=True)
+        console.output(f"日志目录：{display_text(str(logs.path.resolve()))}")
         console.write(f"System：{'模拟' if settings.mode == 'demo' else '真实模型'}比赛 BO{config.best_of}，"
                       f"先胜 {config.target_wins} 局；实际最多 {config.max_games} 局。")
-        console.write(f"System：参赛模型：{console.names['A']} vs {console.names['B']}。")
+        console.write(f"System：参赛玩家：{console.names['A']} vs {console.names['B']}。")
         console.write("System：实验性 alternating：双方轮流行动，每方最多 20 次；每局交换先手。"
                       if settings.initiative == "alternating" else "System：simultaneous：双方结束行动后同步推进，聊天即时公开。")
         console.write("System：出拳规则 locked：首次提交后锁定；双方提交齐全的当前 Tick 结束时结算。"
@@ -99,6 +113,7 @@ async def play(args: argparse.Namespace) -> int:
         console.write(f"System：思考设置 {console.names['A']}={thinking['A']}，{console.names['B']}={thinking['B']}（对局与赛后聊天均适用）。")
         logs.lifecycle("match_start", best_of=config.best_of, max_games=config.max_games,
                        target_wins=config.target_wins, players=names, mode=settings.mode,
+                       player_types={seat: player.type for seat, player in zip(("A", "B"), settings.seats)},
                        timeout=policy.timeout, retry_delay=policy.retry_delay, move_policy=config.move_policy,
                        thinking=thinking, initiative=settings.initiative,
                        analysis={"A": settings.red.analysis, "B": settings.blue.analysis},
@@ -177,22 +192,22 @@ async def play(args: argparse.Namespace) -> int:
         return {MatchStatus.WON: 0, MatchStatus.UNDECIDED: 3, MatchStatus.TECHNICAL_ERROR: 1}[result.status]
 
     if settings.mode == "demo":
-        names = player_names("模拟玩家1", "模拟玩家2")
+        names = player_names(*(player.display_name if player.type == "human" else f"模拟玩家{index}"
+                               for index, player in enumerate(settings.seats, 1)))
+
+        def demo_factory():
+            scripted = demo_players(scenario, analysis=tuple(p.analysis for p in settings.seats))
+            return tuple(HumanPlayer(analysis=config.analysis) if config.type == "human" else player
+                         for config, player in zip(settings.seats, scripted))
+
         with RunLogs(settings.log_dir, names=names) as logs:
-            return await execute(lambda: demo_players(scenario, analysis=tuple(p.analysis for p in settings.seats)),
-                                 names, logs)
-    if settings.red.api_key is not None or settings.blue.api_key is not None:
-        if not settings.red.api_key or not settings.blue.api_key:
-            raise ValueError("TOML 配置必须同时填写 Red 和 Blue 的 api_key。")
-        keys = (settings.red.api_key, settings.blue.api_key)
-    else:
-        deepseek_key, openai_key = load_keys(args.secrets_file or Path("local_secrets.py"))
-        legacy_keys = {"openai": openai_key, "deepseek": deepseek_key}
-        keys = tuple(legacy_keys[player.adapter] for player in settings.seats)
+            return await execute(demo_factory, names, logs)
+    keys = player_keys(settings, args.secrets_file or Path("local_secrets.py"))
     names = player_names(settings.red.display_name, settings.blue.display_name)
     async with httpx.AsyncClient(timeout=policy.timeout, follow_redirects=False) as client:
         players = model_players(client, settings, keys, names)
-        with RunLogs(settings.log_dir, secrets=keys, names=names) as logs:
+        secrets = tuple(key for key in (*keys, *(p.api_key for p in settings.seats)) if key)
+        with RunLogs(settings.log_dir, secrets=secrets, names=names) as logs:
             return await execute(lambda: players, names, logs)
 
 
@@ -219,7 +234,7 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError as exc:
         print(f"配置错误：{exc}", file=sys.stderr)
         return 2
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, UserInterrupted):
         print("\nSystem：用户中止运行。", file=sys.stderr)
         return 130
 

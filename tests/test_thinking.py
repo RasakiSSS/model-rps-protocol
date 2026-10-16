@@ -123,7 +123,7 @@ class ThinkingTests(unittest.IsolatedAsyncioTestCase):
                 self.assertNotIn("NATIVE-", output.getvalue())
                 self.assertIn("SUMMARY-A", output.getvalue())
                 self.assertIn("SUMMARY-B", output.getvalue())
-                self.assertIn(f"参赛模型：Red · {OPENAI.model} vs Blue · {DEEPSEEK.model}", output.getvalue())
+                self.assertIn(f"参赛玩家：Red · {OPENAI.model} vs Blue · {DEEPSEEK.model}", output.getvalue())
                 root, = (path / "logs").iterdir()
                 for directory, player, mode in (("red", OPENAI.model, a_mode), ("blue", DEEPSEEK.model, b_mode)):
                     rows = [json.loads(s) for s in (root / f"{directory}/debug.log").read_text(encoding="utf-8").splitlines()]

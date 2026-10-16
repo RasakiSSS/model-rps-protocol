@@ -22,6 +22,14 @@ class Console:
         self.game = 0
         self.tick = 0
         self.color = supports_color() if color is None else color
+        self.output = lambda text: print(text, flush=True)
+
+    def private(self, text: str) -> None:
+        """人类自己的草稿、输入反馈与状态，不发送对手或写入 chat.log。"""
+        text = display_text(text)
+        if self.logs is not None:
+            text = self.logs.redact(text)
+        self.output(f"仅自己：{text}")
 
     def write(self, text: str, *, debug_only: bool = False) -> None:
         if self.logs is not None:
@@ -31,7 +39,7 @@ class Console:
             if self.logs is not None:
                 self.logs.lifecycle("tick", game=self.game, tick=self.tick, text=text.strip())
         else:
-            print(color_names(text, self.names) if self.color else text, flush=True)
+            self.output(color_names(text, self.names) if self.color else text)
 
     def event(self, event: Event) -> None:
         self.tick = event.tick

@@ -6,20 +6,22 @@ from pathlib import Path
 
 from .config import RuntimeConfig
 from .players import ChatCompletionPlayer, MODEL_ADAPTERS, configure_thinking
+from .human import HumanPlayer
 
 
-def load_keys(path: Path) -> tuple[str, str]:
-    """只读取两个字符串常量，不执行密钥文件中的 Python 代码。"""
+def load_keys(path: Path, *, required=("openai", "deepseek")) -> tuple[str | None, str | None]:
+    """只读取模型席位所需的字符串常量，不执行密钥文件中的 Python 代码。"""
     try:
         tree = ast.parse(path.read_text(encoding="utf-8-sig"))
     except (OSError, SyntaxError, UnicodeError):
-        raise ValueError("无法读取密钥文件；请创建 local_secrets.py 并填写两个 API key 字符串。") from None
+        raise ValueError("无法读取密钥文件；请在 config.toml 或 local_secrets.py 中填写模型席位所需的 API key。") from None
     keys = {}
+    wanted = {"OPENAI_API_KEY" if adapter == "openai" else "DEEPSEEK_API_KEY" for adapter in required}
     for statement in tree.body:
         if not isinstance(statement, ast.Assign):
             continue
         for target in statement.targets:
-            if isinstance(target, ast.Name) and target.id in ("DEEPSEEK_API_KEY", "OPENAI_API_KEY"):
+            if isinstance(target, ast.Name) and target.id in wanted:
                 try:
                     value = ast.literal_eval(statement.value)
                 except (ValueError, TypeError, SyntaxError):
@@ -27,15 +29,29 @@ def load_keys(path: Path) -> tuple[str, str]:
                 if not isinstance(value, str) or not value.strip():
                     raise ValueError(f"请在本地密钥文件中填写 {target.id}。")
                 keys[target.id] = value
-    if set(keys) != {"DEEPSEEK_API_KEY", "OPENAI_API_KEY"}:
-        raise ValueError("密钥文件必须包含 DEEPSEEK_API_KEY 和 OPENAI_API_KEY 两个字符串常量。")
-    return keys["DEEPSEEK_API_KEY"], keys["OPENAI_API_KEY"]
+    if set(keys) != wanted:
+        raise ValueError("密钥文件缺少模型席位所需的 API key 字符串常量。")
+    return keys.get("DEEPSEEK_API_KEY"), keys.get("OPENAI_API_KEY")
+
+
+def player_keys(settings, path):
+    required = [player for player in settings.seats if player.type == "llm"]
+    if any(player.api_key is not None for player in required):
+        if not all(player.api_key for player in required):
+            raise ValueError("TOML 配置必须填写所有模型席位的 api_key；人类席位不需要密钥。")
+        return tuple(player.api_key if player.type == "llm" else None for player in settings.seats)
+    deepseek, openai = load_keys(path, required={player.adapter for player in required})
+    legacy = {"deepseek": deepseek, "openai": openai}
+    return tuple(legacy[player.adapter] if player.type == "llm" else None for player in settings.seats)
 
 
 
 def model_players(client, settings: RuntimeConfig, keys, names):
     players = []
     for config, key in zip(settings.seats, keys, strict=True):
+        if config.type == "human":
+            players.append(HumanPlayer(analysis=config.analysis))
+            continue
         spec = configure_thinking(replace(MODEL_ADAPTERS[config.adapter], model=config.model,
                                           base_url=config.base_url), config.thinking)
         players.append(ChatCompletionPlayer(

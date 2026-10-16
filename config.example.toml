@@ -1,10 +1,10 @@
-# 复制为 config.toml 并填写两个 api_key。实际配置已被 Git 忽略。
+# 复制为 config.toml 并填写模型席位的 api_key。实际配置已被 Git 忽略。
 # 命令行参数 > 本文件 > 内置默认值；只写需要覆盖的字段即可。
 
 [app]
 mode = "live"                       # live / demo
 log_dir = "logs"                     # 相对于本配置文件；CLI --log-dir 相对于工作目录
-timeout_seconds = 120
+timeout_seconds = 120               # 仅限制模型请求，不限制人类输入等待
 retry_delay_seconds = 1
 max_output_tokens = 20000            # 对局与赛后聊天共用，包含思考生成额度
 stream = false                      # true 启用流式；收到完整响应后才执行动作
@@ -18,6 +18,7 @@ best_of = 9                          # 正奇数，BO9 先胜5局
 initiative = "simultaneous"          # alternating 为实验性轮流行动，仅支持 locked
 
 [players.red]
+type = "llm"                       # llm / human；一个终端最多一位 human
 adapter = "openai"                  # openai / deepseek；决定请求参数，与席位无关
 model = "gpt-5.6-sol"
 # name = "GPT-5.6 Sol"               # 显示为 Red · 名称；省略时使用 model
@@ -27,6 +28,7 @@ thinking = "high"                    # off / low / medium / high / xhigh / max
 analysis = "required"                # off / optional / required；独立于思考设置
 
 [players.blue]
+type = "llm"
 adapter = "deepseek"                # 两席可使用完全相同的 adapter、model、地址和密钥
 model = "deepseek-flash"
 # name = "DeepSeek"
@@ -37,3 +39,6 @@ analysis = "required"                # required 时每次行动必须提交 ANAL
 
 # 同模型对战：将 red 的 adapter、model、base_url、api_key 复制到 blue。
 # thinking 可以相同，也可以分别设置；双方始终保持独立历史和日志。
+# 人类玩家：将其中一席 type 改为 "human"，name 改为用户名，analysis 改为 "optional"。
+# 人类席位无需 api_key，可省略 adapter、model、base_url 和 thinking；这些字段若保留仍需合法。
+# analysis 省略时，模型默认 required，人类默认 optional；显式填写的值不会随 type 自动改变。

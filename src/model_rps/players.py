@@ -33,6 +33,14 @@ class ModelResponse:
     has_reasoning: bool = False
 
 
+@dataclass(frozen=True)
+class PlayerInput:
+    """人类在确认输入时持有的视图；等待输入期间允许更新可见状态。"""
+
+    content: str
+    view: PlayerView
+
+
 class Player(Protocol):
     analysis_policy: AnalysisPolicy
 
@@ -44,8 +52,8 @@ class Player(Protocol):
         """删除未应用请求产生的私有历史；不删除诊断日志或用量。"""
         ...
 
-    async def respond(self, view: PlayerView, feedback: str | None = None) -> str | ModelResponse:
-        """返回待校验的 JSON 正文，可附带适配器确认的思考可用性。"""
+    async def respond(self, view: PlayerView, feedback: str | None = None) -> str | ModelResponse | PlayerInput:
+        """返回待校验的 JSON；模型可附带思考标记，人类附带确认输入时的视图。"""
         ...
 
 
