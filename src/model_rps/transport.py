@@ -1,6 +1,7 @@
 """HTTP、流式生命周期与协议转换；不持有比赛历史或处理玩家指令。"""
 
 import asyncio
+from contextlib import aclosing
 
 import httpx
 
@@ -79,13 +80,14 @@ class ModelTransport:
                         self._check_status(response)
                     if response.headers.get("content-type", "").split(";")[0].strip().lower() != "text/event-stream":
                         raise StreamError("模型服务未返回 SSE 流式响应")
-                    async for data in sse_data(response):
-                        before = assembled.chunks
-                        assembled.feed(data)
-                        if assembled.done:
-                            break
-                        if assembled.chunks > before:
-                            deadline.reschedule(asyncio.get_running_loop().time() + self.idle_timeout)
+                    async with aclosing(sse_data(response)) as events:
+                        async for data in events:
+                            before = assembled.chunks
+                            assembled.feed(data)
+                            if assembled.done:
+                                break
+                            if assembled.chunks > before:
+                                deadline.reschedule(asyncio.get_running_loop().time() + self.idle_timeout)
                     result = assembled.result()
             status = "complete"
             return result

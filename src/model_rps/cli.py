@@ -26,6 +26,7 @@ from .adapters import MODEL_ADAPTERS
 from .commands import AnalysisPolicy
 from .postmatch import MatchArchive, run_postmatch
 from .runner import RequestPolicy
+from .lobby import choose_next_match
 
 
 def make_parser(config: dict | None = None) -> argparse.ArgumentParser:
@@ -37,6 +38,8 @@ def make_parser(config: dict | None = None) -> argparse.ArgumentParser:
     parser.add_argument("--mode", choices=("demo", "live"), default="live",
                         help="live 真实模型（默认）；demo 模拟对局")
     parser.add_argument('--debug', action='store_true', help='额外打开独立调试窗口；前台与普通模式相同（Windows）')
+    parser.add_argument('--session', action='store_true',
+                        help='连续比赛：赛后双方退出后选择下一场玩家；需要交互终端')
     parser.add_argument("--move-policy", choices=tuple(MovePolicy), default=MovePolicy.LOCKED.value,
                         help="locked 提交后锁定（默认）；revisable 允许改拳，下一 Tick 结算")
     parser.add_argument("--scenario", choices=("locked", "change", "settlement", "draw", "forfeit", "deadline", "retry", "chat"),
@@ -78,23 +81,48 @@ def make_parser(config: dict | None = None) -> argparse.ArgumentParser:
     return parser
 
 
-async def play(args: argparse.Namespace) -> int:
+def validate_setup(args: argparse.Namespace) -> RuntimeConfig:
+    """开赛前的本地校验；大厅也使用它，失败时不离开选择界面。"""
     # 显式选择旧密钥文件时，配置中的密钥不参与校验或回退。
     if args.secrets_file is not None:
         args = argparse.Namespace(**{**vars(args), "red_api_key": None, "blue_api_key": None})
     settings = RuntimeConfig.from_args(args)
     if any(player.type == "human" for player in settings.seats) and not (sys.stdin.isatty() and sys.stdout.isatty()):
         raise ValueError("人类玩家需要交互终端，请在 PowerShell 或终端窗口中运行，不要重定向标准输入或输出。")
+    if args.session and not (sys.stdin.isatty() and sys.stdout.isatty()):
+        raise ValueError("--session 需要交互终端，请不要重定向标准输入或输出；单场运行请去掉 --session。")
+    thinking = {seat: player.thinking if player.type == "llm" else "off"
+                for seat, player in zip(("A", "B"), settings.seats)}
+    if settings.mode == "demo" and any(mode != "off" for mode in thinking.values()):
+        raise ValueError("思考开关仅用于真实模型；demo 使用预设脚本，请保持双方思考为 off。")
+    if settings.mode == "demo" and args.scenario in ("change", "settlement") and settings.move_policy == MovePolicy.LOCKED:
+        raise ValueError("change 和 settlement 场景需要 --move-policy revisable。")
+    if settings.mode == "live":
+        player_keys(settings, args.secrets_file or Path("local_secrets.py"))
+    return settings
+
+
+async def play(args: argparse.Namespace) -> int:
+    settings = validate_setup(args)
+    while True:
+        status = await play_once(args, settings)
+        # 技术异常或取消不会被当作双方正常退出，也不自动开始下一场。
+        if not args.session or status not in (0, 3):
+            return status
+        following = await choose_next_match(args, validate=validate_setup)
+        if following is None:
+            return status
+        args, settings = following
+
+
+async def play_once(args: argparse.Namespace, settings: RuntimeConfig) -> int:
+    """一场 BO 及其赛后聊天；返回前关闭终端、日志与 HTTP 客户端。"""
     policy = RequestPolicy(timeout=settings.timeout_seconds,
                            retry_delay=0 if settings.mode == "demo" else settings.retry_delay_seconds)
     config = MatchConfig(settings.best_of, settings.max_games, MovePolicy(settings.move_policy), settings.initiative)
     thinking = {seat: player.thinking if player.type == "llm" else "off"
                 for seat, player in zip(("A", "B"), settings.seats)}
-    if settings.mode == "demo" and any(mode != "off" for mode in thinking.values()):
-        raise ValueError("思考开关仅用于真实模型；demo 使用预设脚本，请保持双方思考为 off。")
     scenario = args.scenario or ("locked" if config.move_policy == MovePolicy.LOCKED else "change")
-    if settings.mode == "demo" and scenario in ("change", "settlement") and config.move_policy == MovePolicy.LOCKED:
-        raise ValueError("change 和 settlement 场景需要 --move-policy revisable。")
 
     async def execute(factory, names, logs):
         console = Console(names, logs)
@@ -122,6 +150,8 @@ async def play(args: argparse.Namespace) -> int:
         console.write(f"System：思考设置 {console.names['A']}={thinking['A']}，{console.names['B']}={thinking['B']}（对局与赛后聊天均适用）。")
         logs.lifecycle("match_start", best_of=config.best_of, max_games=config.max_games,
                        target_wins=config.target_wins, players=names, mode=settings.mode,
+                       profiles={seat: getattr(args, f"{prefix}_profile", None)
+                                 for seat, prefix in (("A", "red"), ("B", "blue"))},
                        player_types={seat: player.type for seat, player in zip(("A", "B"), settings.seats)},
                        timeout=policy.timeout, retry_delay=policy.retry_delay, move_policy=config.move_policy,
                        thinking=thinking, initiative=settings.initiative,

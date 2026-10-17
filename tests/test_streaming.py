@@ -67,6 +67,24 @@ def response(parts, status=200):
 
 
 class StreamingTests(unittest.IsolatedAsyncioTestCase):
+    async def test_sse_reader_closes_before_response_returns_at_done_marker(self):
+        from model_rps.streaming import sse_data
+
+        closed = []
+
+        async def tracked(response):
+            try:
+                async for data in sse_data(response):
+                    yield data
+            finally:
+                closed.append(True)
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(lambda request: response(complete(decision())))) as client:
+            with patch('model_rps.transport.sse_data', tracked):
+                player = ChatCompletionPlayer(client, OPENAI, 'test-key', stream=True)
+                await player.respond(GameState().view_for('A'))
+                self.assertEqual(closed, [True])
+
     async def test_postmatch_incomplete_exit_is_never_published_or_kept_in_history(self):
         for recover in (True, False):
             with self.subTest(recover=recover):

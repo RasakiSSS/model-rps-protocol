@@ -1,4 +1,4 @@
-"""每次运行的五份 UTF-8 日志；记录后立即 flush，私有日志不参与模型输入。"""
+"""每场 BO 的五份 UTF-8 日志；记录后立即 flush，私有日志不参与模型输入。"""
 
 import json
 import unicodedata
