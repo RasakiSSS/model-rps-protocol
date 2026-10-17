@@ -1,12 +1,11 @@
-"""玩家接口、模拟玩家和兼容 Chat Completions 的模型适配器。"""
+"""玩家接口、模拟玩家及保留独立上下文的模型玩家；HTTP 协议由传输层处理。"""
 
 from __future__ import annotations
 
-import asyncio
 import json
 import math
 from collections import deque
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass
 from typing import Protocol
 from urllib.parse import urlsplit
 
@@ -19,11 +18,11 @@ from .history import ConversationHistory, HistoryCheckpoint
 from .diagnostics import trace
 from .identities import named_data
 from .prompts import POSTMATCH_PROMPT, game_prompt
-from .streaming import CompletionStream, StreamError, sse_data
+from .adapters import (ModelSpec, MODEL_ADAPTERS, DEEPSEEK, OPENAI, configure_thinking,
+                       DEEPSEEK_THINKING_MODES, OPENAI_THINKING_MODES)
+from .transport import ModelTransport, PlayerError
 
 MAX_OUTPUT_TOKENS = 20000
-DEEPSEEK_THINKING_MODES = ("off", "low", "high", "max")
-OPENAI_THINKING_MODES = ("off", "low", "medium", "high", "xhigh", "max")
 
 
 @dataclass(frozen=True)
@@ -72,50 +71,6 @@ class MatchPlayer(Player, Protocol):
         ...
 
 
-class PlayerError(Exception):
-    """safe_message 仅接受适配器生成的错误概况，不应包含服务器原文或密钥。"""
-
-    def __init__(self, safe_message: str, *, retryable: bool = True) -> None:
-        super().__init__(safe_message)
-        self.safe_message = safe_message
-        self.retryable = retryable
-
-
-@dataclass(frozen=True)
-class ModelSpec:
-    name: str
-    model: str
-    base_url: str
-    token_parameter: str
-    extra_body: dict = field(default_factory=dict)
-    thinking_api: str | None = None
-    thinking_mode: str = "off"
-
-
-DEEPSEEK = ModelSpec("DeepSeek V4.1 Flash", "deepseek-flash", "https://api.deepseek.com",
-                     "max_tokens", {"thinking": {"type": "disabled"}}, thinking_api="deepseek")
-OPENAI = ModelSpec("GPT-6 Luna", "gpt-6-luna", "https://ai.yuhuantin.icu/v1",
-                   "max_completion_tokens", {"reasoning_effort": "none"}, thinking_api="openai")
-
-MODEL_ADAPTERS = {"openai": OPENAI, "deepseek": DEEPSEEK}
-
-
-def configure_thinking(spec: ModelSpec, mode: str) -> ModelSpec:
-    """显式选择服务参数；不改模型标识、提示词或共享的默认配置。"""
-    modes = {"deepseek": DEEPSEEK_THINKING_MODES, "openai": OPENAI_THINKING_MODES}
-    if spec.thinking_api not in modes or mode not in modes[spec.thinking_api]:
-        raise ValueError("该适配器不支持所选思考档位。")
-    body = dict(spec.extra_body)
-    if spec.thinking_api == "deepseek":
-        body["thinking"] = {"type": "disabled" if mode == "off" else "enabled"}
-        body.pop("reasoning_effort", None)
-        if mode != "off":
-            body["reasoning_effort"] = mode
-    else:
-        body["reasoning_effort"] = "none" if mode == "off" else mode
-    return replace(spec, extra_body=body, thinking_mode=mode)
-
-
 class ChatCompletionPlayer:
     def __init__(self, client: httpx.AsyncClient, spec: ModelSpec, api_key: str, *,
                  max_output_tokens: int = MAX_OUTPUT_TOKENS, names: dict[str, str] | None = None,
@@ -148,6 +103,10 @@ class ChatCompletionPlayer:
         self.stream_idle_timeout = stream_idle_timeout
         self.names = dict(names) if names is not None else {"A": "A", "B": "B"}
         self.analysis_policy = AnalysisPolicy(analysis)
+        if spec.protocol not in ("chat_completions", "anthropic_messages"):
+            raise ValueError("不支持的模型接口协议。")
+        self._transport = ModelTransport(client, spec, self._api_key, max_output_tokens=max_output_tokens,
+            stream=stream, first_timeout=stream_first_timeout, idle_timeout=stream_idle_timeout)
         self.start_match()
 
     def start_match(self) -> None:
@@ -195,86 +154,11 @@ class ChatCompletionPlayer:
             trace("context_usage", **self._context_usage.record(self._usage, messages))
 
     async def _send(self, messages: list[dict]) -> ModelResponse:
-        payload = {
-            **self.spec.extra_body,
-            "model": self.spec.model,
-            "messages": messages,
-            "response_format": {"type": "json_object"},
-            "stream": self.stream,
-            self.spec.token_parameter: self.max_output_tokens,
-        }
-        trace("request_config", model=self.spec.model, thinking_api=self.spec.thinking_api,
-              requested_thinking=self.spec.thinking_mode, max_output_tokens=self.max_output_tokens,
-              stream=self.stream, stream_first_timeout=self.stream_first_timeout,
-              stream_idle_timeout=self.stream_idle_timeout)
-        if self.stream:
-            payload['stream_options'] = {'include_usage': True}
-        trace("http_request", payload=payload)
-        if self.stream:
-            return self._parse_completion(await self._stream_complete(payload))
         try:
-            response = await self.client.post(
-                self.spec.base_url.rstrip("/") + "/chat/completions",
-                headers={"Authorization": f"Bearer {self._api_key}"},
-                json=payload,
-            )
-        except httpx.TimeoutException:
-            raise TimeoutError from None
-        except httpx.RequestError:
-            raise PlayerError("模型服务连接失败") from None
-        # 不记录请求头、响应头和传输异常原文。日志层会过滤本次运行的密钥。
-        trace("http_response", status=response.status_code, body=response.text)
-        if not response.is_success:
-            retryable = response.status_code in (408, 409, 429) or response.status_code >= 500
-            raise PlayerError(f"模型服务返回 HTTP {response.status_code}", retryable=retryable)
-        try:
-            data = response.json()
-        except (ValueError, RecursionError):
-            raise PlayerError("模型服务返回的响应结构无效") from None
-        return self._parse_completion(data)
-
-    async def _stream_complete(self, payload: dict) -> dict:
-        assembled = CompletionStream()
-        status = 'incomplete'
-        trace('stream_status', status='waiting')
-        try:
-            # 首包时限覆盖连接、响应头和第一个数据事件；心跳不能无限续命。
-            async with asyncio.timeout(self.stream_first_timeout) as deadline:
-                async with self.client.stream('POST', self.spec.base_url.rstrip('/') + '/chat/completions',
-                                              headers={'Authorization': f'Bearer {self._api_key}'},
-                                              json=payload, timeout=None) as response:
-                    trace('http_response', status=response.status_code, stream=True)
-                    if not response.is_success:
-                        await response.aread()
-                        trace('http_error_body', body=response.text)
-                        retryable = response.status_code in (408, 409, 429) or response.status_code >= 500
-                        raise PlayerError(f'模型服务返回 HTTP {response.status_code}', retryable=retryable)
-                    if response.headers.get('content-type', '').split(';')[0].strip().lower() != 'text/event-stream':
-                        raise StreamError('模型服务未返回 SSE 流式响应')
-                    async for data in sse_data(response):
-                        assembled.feed(data)
-                        if assembled.done:
-                            break
-                        deadline.reschedule(asyncio.get_running_loop().time() + self.stream_idle_timeout)
-                    result = assembled.result()
-            status = 'complete'
-            return result
-        except StreamError as exc:
-            raise PlayerError(str(exc)) from None
-        except TimeoutError:
-            which = '首包' if not assembled.chunks else '空闲'
-            raise PlayerError(f'流式{which}等待超时') from None
-        except httpx.TimeoutException:
-            raise TimeoutError from None
-        except httpx.RequestError:
-            raise PlayerError('模型流式连接中断') from None
-        except asyncio.CancelledError:
-            status = 'cancelled'
-            raise
+            data = await self._transport.complete(messages)
         finally:
-            self._usage = assembled.usage
-            trace('stream_end', status=status, chunks=assembled.chunks, message=assembled.message,
-                  usage=assembled.usage, finish_reason=assembled.finish_reason, done=assembled.done)
+            self._usage = self._transport.usage
+        return self._parse_completion(data)
 
     def _parse_completion(self, data: object) -> ModelResponse:
         try:

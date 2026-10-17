@@ -4,7 +4,7 @@
 
 玩家负责交流与决策，Python 裁判负责规则、信息隔离和胜负判定。项目用于观察模型在不同规则和提示词下的博弈行为，不预设模型必须聊天，也不把单场胜负当作模型能力排名。
 
-当前代码版本为 **0.7.0**，支持人类 CLI 玩家、独立聊天、上下文增量传递和赛后沉默待机。Red、Blue 两个席位可选择人类或模型，一个终端最多一位人类；模型可以相同，各自上下文独立。现有适配器提供 OpenAI 与 DeepSeek 参数方案的 Chat Completions 兼容接口。默认同时行动、首次出拳锁定，另有允许改拳的对照模式和实验性轮流行动模式。支持可选流式响应，默认仍为非流式。
+当前代码版本为 **0.8.0**，支持 OpenAI、DeepSeek、GLM、Gemini、Grok 与 Claude 六种适配方案，可在配置中保存多个模型条目。Red、Blue 两个席位可选择人类或模型，一个终端最多一位人类；模型可以相同，各自上下文独立。提供独立聊天、上下文增量传递和赛后沉默待机。默认同时行动、首次出拳锁定，另有允许改拳的对照模式和实验性轮流行动模式。支持可选流式响应，默认仍为非流式。
 
 ## 功能
 
@@ -13,7 +13,7 @@
 - **独立聊天**：可单独发言，不消耗行动机会；开局和行动权限变化时，非行动方也有主动发言机会。消息排队合并，同一玩家始终只有一个请求。
 - **BO 比赛**：支持任意正奇数 BO，先达到目标胜局数即结束；平局继续，设有实际总局数上限。
 - **独立上下文**：同一场 BO 内保留各自历史，新比赛清空；结算前隐藏拳型。
-- **TOML 配置**：设置双方密钥、服务地址、模型、显示名、思考级别与比赛参数。
+- **TOML 配置**：保存人类与模型 profile，按模型设置密钥、地址、思考与流式参数，再指定 Red / Blue 使用的条目。
 - **Red / Blue 席位**：红蓝玩家标签，支持同模型、同地址、同密钥对战，各自上下文与日志独立。
 - **独立调试窗口**：Windows 下 `--debug` 另开只读命令行窗口，前台显示与普通模式一致。
 - **日志与赛后聊天**：分析要求可按席位配置；赛后公开分析，双方沿用本场上下文继续 `SAY` 交流，双方 `EXIT` 后结束。
@@ -21,7 +21,7 @@
 
 完整规则与数据约定见 [项目协议 v0.2](model-rps-protocol-v0.2.md)。
 
-后续计划扩展模型适配与比赛之间换对手，见 [开发方向与设计讨论](ROADMAP.md)。这些计划尚未实现，当前使用规则以本文为准。
+后续计划支持比赛之间换对手，再处理局中模型接管，见 [开发方向与设计讨论](ROADMAP.md)。这些计划尚未实现，当前使用规则以本文为准。
 
 ## 快速开始
 
@@ -71,20 +71,23 @@ Copy-Item config.example.toml config.toml
 
 macOS / Linux 使用 `cp config.example.toml config.toml`。也可以在文件管理器中复制模板并重命名为 `config.toml`；确认文件名不是 `config.toml.txt`。
 
-用文本编辑器打开新建的 `config.toml`，填写模型席位的密钥，并按实际服务修改以下字段。仅复制模板仍无法运行真实比赛，因为模板中的密钥为空。人类席位不需要密钥，设置方法见下方“人类参与比赛”。
+用文本编辑器打开新建的 `config.toml`，在 `[profiles.gpt]`、`[profiles.deepseek]` 等模型条目中填写密钥、地址和模型标识，再通过 `[players.red]`、`[players.blue]` 的 `profile` 选择它们。模板默认选择 gpt / deepseek，未选中的模型可以暂不填写密钥。仅复制模板仍无法运行真实比赛，因为模板中的密钥为空。人类 profile 不需要密钥。
 
-| `[players.red]` 与 `[players.blue]` 下的字段 | 填写内容 |
+| 字段 | 填写内容 |
 | --- | --- |
-| `type` | `llm`（默认）或 `human`；一个终端最多一位人类 |
-| `adapter` | `openai` 或 `deepseek`，选择请求参数方案；两席可选相同值 |
+| `type` | profile 或席位使用：`llm`（默认）或 `human`；一个终端最多一位人类 |
+| `profile` | 仅席位使用：引用 `[profiles.名称]`，例如 `profile = "claude"` 或 `"human"` |
+| `adapter` | `openai`、`deepseek`、`glm`、`gemini`、`grok`、`anthropic`；模型 profile 必填，人类不填 |
 | `api_key` | 对应服务提供的密钥，仅模型席位需要填写 |
-| `base_url` | API 基础地址，不包含末尾的 `/chat/completions` |
+| `base_url` | API 基础地址，不包含末尾的 `/chat/completions` 或 `/messages` |
 | `model` | 该服务实际支持的模型标识 |
 | `thinking` | 当前适配器允许、且模型服务支持的思考级别 |
 | `analysis` | 策略分析要求：`off` 关闭、`optional` 可选、`required` 必填；省略时模型必填、人类可选 |
 | `name` | 可选名称，显示为 `Red · 名称` 或 `Blue · 名称`；省略时模型使用模型标识，人类显示“玩家” |
 
-模板中的 GPT 地址是第三方兼容服务，DeepSeek 地址是官方服务；它们是实验配置示例，不要求使用相同服务。更换服务时，应同时核对地址、模型标识与密钥。程序会在基础地址后追加 `/chat/completions`。
+除 `profile` 外，上述字段可放在模型 profile 中，或在席位上覆盖。人类 profile 只使用 `type`、`name`、`analysis`。仍支持完整席位配置；旧 `[models.名称]` 兼容为模型条目，与 profiles 共享名称，不能重名。
+
+模板中的 GPT 地址是第三方兼容服务，其他地址是相应官方接口的示例，不要求使用相同服务。更换服务时，应同时核对地址、模型标识与密钥。`anthropic` 使用原生 Messages 接口，其他适配器使用 Chat Completions；具体参数和兼容性见 [模型适配说明](MODEL_ADAPTERS.md)。
 
 `config.toml` 已被 Git 忽略。共享配置时使用不含密钥的 [config.example.toml](config.example.toml)。
 
@@ -98,24 +101,29 @@ macOS / Linux 使用 `cp config.example.toml config.toml`。也可以在文件�
 
 ## 人类参与比赛
 
-已有有效的 `config.toml` 时，可临时把 Red 改成人类，与 Blue 的模型对战：
+模板已提供 `[profiles.human]`。将其中的 `name` 改为自己的用户名，然后选择这个 profile，与 Blue 的模型对战：
 
 ```powershell
-.\.venv\Scripts\python.exe -m model_rps --red-type human --red-name "小明" --red-analysis optional --bo 3
+.\.venv\Scripts\python.exe -m model_rps --red-profile human --bo 3
 ```
 
-改用 Blue 时，将以上三个 `--red-*` 参数换成 `--blue-*`；另一席位继续使用配置中的模型与密钥。`--initiative alternating` 启用轮流行动，第一局 Red 先手，之后每局交换。
+改用 Blue 时使用 `--blue-profile human`；另一席位继续使用配置中的模型与密钥。`--initiative alternating` 启用轮流行动，第一局 Red 先手，之后每局交换。
 
-也可以将配置中的整个 `[players.red]` 节替换为以下内容，保留 `[players.blue]` 的模型配置：
+也可以在配置中选择人类 profile：
 
 ```toml
-[players.red]
+[profiles.human]
 type = "human"
 name = "小明"
 analysis = "optional"
+
+[players.red]
+profile = "human"
 ```
 
-人类席位可以省略模型、地址、密钥和思考设置；已有的合法模型设置也可保留，切换回 `llm` 时继续使用。省略 `analysis` 时，人类默认为 `optional`，模型默认为 `required`；模板已经显式写了 `required`，只修改 `type` 不会覆盖它，需要同时修改或用命令行覆盖。
+修改已有配置节，不要重复添加同名节。席位不写 `type` 时跟随 profile；如果席位显式写了 `type = "llm"`，它会覆盖人类 profile，应删掉该覆盖项或使用 `--red-type human`。`--red-name`、`--red-analysis` 仍可临时覆盖昵称和分析要求。
+
+旧的 `--red-type human --red-name "小明"` 和直接在席位配置 type/name 的方式继续支持。人类无需密钥，输入等待不受流式时限影响。省略 `analysis` 时，人类默认为 `optional`，模型默认为 `required`；显式填写的分析要求不随类型自动变化。
 
 无需密钥的离线练习：
 
@@ -144,21 +152,23 @@ analysis = "optional"
 
 ## 配置与常用命令
 
-程序默认读取**当前工作目录**中的 `config.toml`，优先级为 **命令行参数 > TOML 配置 > 内置默认值**。配置文件使用 UTF-8 编码。
+程序默认读取**当前工作目录**中的 `config.toml`。玩家字段的优先级为 **命令行参数 > TOML 席位字段 > 选中的 profile > 内置默认值**；流式字段还可继承 app 默认值，详见下文。其余字段为命令行 > TOML > 内置默认值。配置文件使用 UTF-8 编码。
 
 | 配置节 | 字段 | 用途 |
 | --- | --- | --- |
 | `[app]` | `mode`、`log_dir` | live / demo，以及日志根目录 |
 | `[app]` | `timeout_seconds`、`retry_delay_seconds` | 每次模型请求总时限、重试间隔；不限制人类输入等待 |
 | `[app]` | `max_output_tokens` | 对局和赛后聊天共用的单次输出上限 |
-| `[app]` | `stream` | 是否启用流式响应，默认 `false` |
-| `[app]` | `stream_first_timeout_seconds`、`stream_idle_timeout_seconds` | 首个流式数据事件等待上限、后续数据事件间的等待上限 |
+| `[app]` | `stream` | 双方流式开关的默认值，内置 `false` |
+| `[app]` | `stream_first_timeout_seconds`、`stream_idle_timeout_seconds` | 首包、空闲等待的默认值 |
 | `[match]` | `best_of`、`max_games` | BO 正奇数、包含平局的实际总局数上限 |
 | `[match]` | `move_policy` | locked 锁定出拳 / revisable 允许改拳 |
 | `[match]` | `initiative` | simultaneous 同时行动 / alternating 轮流行动 |
-| `[players.red]`、`[players.blue]` | `type`、`adapter`、`model`、`base_url`、`api_key`、`thinking`、`analysis`、`name` | 双方玩家类型、适配器、模型与身份设置 |
+| `[profiles.名称]`，type=llm 或省略 | `type`、`adapter`、`model`、`base_url`、`api_key`、`thinking`、`analysis`、`name`，以及三个流式字段 | 可重复引用的模型配置 |
+| `[profiles.名称]`，type=human | `type`、`name`、`analysis` | 可重复选择的人类身份，无需密钥 |
+| `[players.red]`、`[players.blue]` | `profile`，以及模型 profile 中的所有字段 | 选择玩家，按席位覆盖设置 |
 
-内置默认值为真实模式、BO1、同时行动、锁定出拳、双方思考 `off`、60 秒超时、1 秒重试间隔和 20,000 token 输出上限。模板覆盖部分设置：BO9、双方思考 `high`、120 秒超时。模型与服务地址以你填写的配置为准。
+内置默认值为真实模式、BO1、同时行动、锁定出拳、OpenAI / DeepSeek 思考 `off`、60 秒超时、1 秒重试间隔和 20,000 token 输出上限。新增的四种适配器默认思考为 `high`。模板覆盖部分设置：BO9、所列模型思考 `high`、120 秒超时。模型与服务地址以你填写的配置为准。
 
 省略 `max_games` 时，上限按**最终生效的 BO × 10** 计算；显式设置时不得小于目标胜局数。配置中的相对日志路径基于配置文件所在目录，命令行 `--log-dir` 则基于当前工作目录。
 
@@ -182,23 +192,49 @@ analysis = "optional"
 
 ### 同模型对战与旧配置
 
-将 Red 的 `adapter`、`model`、`base_url`、`api_key` 复制到 Blue，即可让同一个模型对战。双方可以共享密钥，仍会发起各自的请求。`thinking` 可相同或分别设置，`name` 可选；即使名称相同，Red / Blue 标签也能区分双方。
+两席引用同一个 `profile` 即可让相同模型对战。双方可以共享密钥，仍会发起各自的请求。`thinking` 可相同或分别设置，`name` 可选；即使名称相同，Red / Blue 标签也能区分双方。
 
-两席都可选择 `openai` 或 `deepseek`，适配器决定思考和输出长度参数，不根据模型名称猜测。省略适配器时，Red 默认为 `openai`，Blue 默认为 `deepseek`；省略模型或地址时，使用所选适配器的内置值。已经填写的模型、地址不会因切换适配器而自动改写。
+```powershell
+# 同模型对战
+.\.venv\Scripts\python.exe -m model_rps --red-profile glm --blue-profile glm --bo 3
+
+# 选择不同模型，单独覆盖 Blue 的思考级别
+.\.venv\Scripts\python.exe -m model_rps --red-profile claude --blue-profile gemini --blue-thinking medium --max-output-tokens 20000 --bo 3
+```
+
+`--red-profile`、`--blue-profile` 选择当前配置文件中的玩家条目；切换时重新读取该条目的类型、模型及相关设置，席位上显式填写的覆盖字段仍然生效。新建条目时建议使用 `glm` 这样的简单名称，含点号的 TOML 名称需要加引号，例如 `[profiles."glm-5.3"]`。
+
+两席可选任意适配器。适配器决定协议、鉴权、思考和输出长度参数，不根据模型名称猜测。未选择 profile 且省略适配器时，Red 默认为 `openai`，Blue 默认为 `deepseek`；省略模型或地址时，使用所选适配器的内置值。已经填写的模型、地址不会因单独切换适配器而自动改写。
 
 命令行支持 `--red-adapter`、`--blue-adapter`，以及各席位的 `--red-model` / `--blue-model`、`--red-base-url` / `--blue-base-url`、`--red-thinking` / `--blue-thinking`、`--red-name` / `--blue-name`。密钥仍填写在本地配置中。
 
-旧 `[players.gpt]`、`[players.deepseek]` 分别兼容映射到 Red、Blue；旧 `--openai-*`、`--deepseek-*` 参数也是对应席位的别名。迁移时将两个配置节一起改为 `[players.red]`、`[players.blue]`，并分别添加 `adapter = "openai"`、`adapter = "deepseek"`。不能在同一文件中混用新旧玩家配置节。使用旧密钥文件时，按所选适配器取对应密钥。
+旧 `[players.gpt]`、`[players.deepseek]` 分别兼容映射到 Red、Blue；旧 `--openai-*`、`--deepseek-*` 参数也是对应席位的别名。迁移时将两个配置节一起改为 `[players.red]`、`[players.blue]`，并分别添加 `adapter = "openai"`、`adapter = "deepseek"`。不能在同一文件中混用新旧玩家配置节。旧密钥文件仅支持 OpenAI / DeepSeek；新增适配器的密钥应填在 TOML 中。
 
 ## 流式响应
 
-在 `config.toml` 的 `[app]` 中设置 `stream = true`，或通过命令行临时启用：
+在 `[app]` 中设置流式默认值；每个模型 profile 或席位都可单独覆盖 `stream`、`stream_first_timeout_seconds`、`stream_idle_timeout_seconds`。例如在已有模型条目中添加：
+
+```toml
+[profiles.grok]
+# 保留原有 adapter、model、base_url、api_key 等字段
+stream = false
+
+[profiles.gemini]
+# 保留原有模型字段
+stream = true
+stream_first_timeout_seconds = 90
+stream_idle_timeout_seconds = 40
+```
+
+这样可让 Grok 非流式、Gemini 流式，其他模型继承 `[app]`。同一模型占两席时，也可在 `[players.red]` / `[players.blue]` 分别覆盖。
+
+流式字段的优先级为 **席位 CLI > 全局 CLI > 席位 TOML > profile > app > 内置默认值**，逐字段合并。显式 `false` 会覆盖 `true`。临时要求双方流式：
 
 ```powershell
 .\.venv\Scripts\python.exe -m model_rps --config config.toml --stream --bo 3
 ```
 
-`--no-stream` 可临时恢复非流式。开关对双方的对局和赛后聊天都生效，兼容同时行动、轮流行动及允许改拳模式；模拟玩家仍使用固定脚本，不产生流式网络请求。
+`--no-stream` 临时关闭双方流式；`--red-stream` / `--no-red-stream` 和 `--blue-stream` / `--no-blue-stream` 只覆盖指定席位，优先于全局参数。同样提供 `--red-stream-first-timeout`、`--red-stream-idle-timeout` 及对应 blue 参数。各席位设置用于自己的对局、独立聊天和赛后聊天；人类与模拟玩家不发起流式网络请求。
 
 流式接收期间，前台不打印逐阶段进度；开启 `--debug` 后在独立窗口显示等待、接收思考或接收正文的状态。接口思考逐步写入各自的 `thought.log`，正文片段只写入私有 `debug.log`。收到正常结束标记并组装完整 JSON 后，才进行动作或赛后聊天校验；即使某个中间片段看起来已经能解析，也不会提前发言、出拳或公开分析。
 
@@ -208,7 +244,7 @@ analysis = "optional"
 | 后续数据事件间隔 | `stream_idle_timeout_seconds` | `--stream-idle-timeout` | 30 秒 |
 | 整次请求，包括持续输出 | `timeout_seconds` | `--timeout` | 内置 60 秒，模板 120 秒 |
 
-以上字段均放在 `[app]`；总时限始终有效，实际以最先达到的时限为准。仅有注释心跳不会重置数据事件等待时间。思考较长时，可根据服务表现调整这些时限。
+首包和空闲字段可写在 `[app]`、模型 profile 或席位中；整次请求的 `timeout_seconds` 仍仅放在 `[app]`，实际以最先达到的时限为准。心跳不会重置数据事件等待时间。思考较长时，可根据服务表现调整这些时限。
 
 断流、缺失结束标记、截断或非法事件会使本次响应无效，沿用最多三次的重试额度。失败片段保留在私有日志，不进入后续模型历史，也不会与下一次请求拼接。服务不支持流式或相关参数时会报错，不自动改为非流式。
 
@@ -323,8 +359,12 @@ System：Red · gpt-5.6-sol → 石头；Blue · deepseek-flash → 布；Blue �
 | --- | --- | --- |
 | `openai` | off、low、medium、high、xhigh、max | 任一席位的 `thinking`；`--red-thinking` / `--blue-thinking` |
 | `deepseek` | off、low、high、max | 任一席位的 `thinking`；`--red-thinking` / `--blue-thinking` |
+| `glm` | low、high、max | 同上，面向 GLM-5.3 |
+| `gemini` | low、medium、high | 同上，面向 Gemini 4 Argon |
+| `grok` | low、medium、high、xhigh | 同上，面向 Grok 4.7 |
+| `anthropic` | low、medium、high、xhigh、max | 同上，面向 Claude Sonnet 5.5 |
 
-这些是本项目适配器接受的选项，不代表所有模型和兼容服务都支持。接口拒绝参数时明确报错，不自动降级。仅更换 `model` 不会改变该席位的请求参数方案，接入不兼容模型需要调整适配器。
+这些是本项目适配器接受的选项，不代表所有模型和兼容服务都支持。新增方案按表中模型的文档配置，不提供 `off`。接口拒绝参数时明确报错，不自动降级。仅更换 `model` 不会改变该席位的请求参数方案，接入不兼容模型需要调整适配器。参数映射、文档来源和实测限制见 [模型适配说明](MODEL_ADAPTERS.md)。
 
 `analysis` 与 `thinking` 分别控制玩家提交的分析、服务的思考参数。每个席位都可独立设置：
 
@@ -419,8 +459,6 @@ logs/日期时间_唯一编号/
 | 模型或参数不支持 | 核对服务支持的模型标识、思考档位、JSON 输出和输出上限 |
 | 请求超时或 JSON 被截断 | 查看私有 `debug.log`，结合服务限制调整超时、思考级别及输出上限 |
 | 模拟模式提示思考设置不支持 | 使用 `--no-config --mode demo`，跳过真实配置 |
-| 双方很快出拳，几乎不聊天 | 这是规则允许的模型选择；提示词不强制聊天或等待 |
-
 每次模型交互最多尝试 3 次，格式纠错和网络重试共用额度；HTTP 408、409、429 和 5xx 可重试，其他 HTTP 错误不重试。重试保持该次请求的快照，只请求出错的一方。有行动权限的请求最终失败会中止比赛；仅聊天请求失败则跳过，不扣机会、不判输，之后等新消息、状态通知或行动机会才再次请求。成功的纯聊天可以接着提交行动，不占后续请求的重试额度。人类输入错误只在本地提示，可直接改正后继续。
 
 退出码：`0` 冠军产生且双方退出赛后聊天；`1` 技术或日志异常；`2` 配置错误；`3` 比赛未决且双方退出赛后聊天；`4` 比赛结束但赛后聊天技术中止；`130` 用户中止。赛后聊天失败不改变已确定的比赛结果。
@@ -444,7 +482,10 @@ model-rps-protocol/
 │  ├─ runner.py / match.py       单局入口与 BO 比赛
 │  ├─ scheduler.py              聊天发布、收件箱、行动权限与请求取消
 │  ├─ requests.py               单次交互的校验、超时与重试
-│  ├─ players.py                 模型适配器与模拟玩家
+│  ├─ players.py                 保留独立上下文的模型玩家与模拟玩家
+│  ├─ adapters.py                厂商参数、协议、地址与鉴权方案
+│  ├─ transport.py               HTTP 请求、流式生命周期与安全错误
+│  ├─ anthropic.py               原生 Messages 响应、思考与 SSE 转换
 │  ├─ history.py                 增量公开事件、同场历史与取消回退
 │  ├─ human.py                   人类玩家、私有行动草稿与确认提交
 │  ├─ human_terminal.py          异步命令输入、输入保护与中断清理
@@ -468,6 +509,10 @@ model-rps-protocol/
 测试使用标准库 `unittest` 和 HTTPX 模拟传输，不调用真实模型。覆盖裁判规则、同时与轮流行动、独立聊天、通知合并、权限隔离、旧局请求取消、上下文用量、配置、请求重试、日志、思考字段和赛后聊天，以及流式分片、断流、超时和跨分片脱敏。人类玩家测试覆盖任一席位、三种合法规则组合、BO 跨局、草稿与分析隔离、输入期间对手发言、赛后连续聊天与退出，以及 EOF / Ctrl+C 清理。
 
 增量历史测试从双方实际请求还原整场公开报告，检查重试与取消不漏事件，并比较固定对话的新旧请求文本体积；赛后测试覆盖沉默、新消息唤醒、待机恢复及人类退出后的终端交接。
+
+模型适配测试覆盖 profile 选择与覆盖优先级、两席独立配置、各服务思考参数、Claude 原生非流式 / SSE、缓存输入用量、思考隔离、断流与取消，以及 Claude / GLM 混合协议的完整 BO 与赛后聊天。
+
+玩家 profile 测试覆盖人类任一席位、昵称与分析要求、密钥豁免、旧 models 兼容、同名冲突及非法配置；混合流式测试从 CLI 完成 BO 与赛后聊天，核对实际请求和日志中的独立开关及等待时限。
 
 更多离线场景可以通过 `--scenario` 选择，例如：
 

@@ -13,6 +13,7 @@ import httpx
 from fixtures import postmatch_payload, turn_payload
 from model_rps.commands import parse_decision, AnalysisPolicy
 from model_rps.cli import make_parser, play
+from model_rps.config import RuntimeConfig
 from model_rps.diagnostics import LogError, request_trace
 from model_rps.game import EndReason, GameState, InvalidResponse, MovePolicy
 from model_rps.logs import RunLogs
@@ -55,7 +56,8 @@ class ThinkingConfigTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 configure_thinking(spec, mode)
         args = make_parser().parse_args([])
-        self.assertEqual((args.blue_thinking, args.red_thinking), ("off", "off"))
+        config = RuntimeConfig.from_args(args)
+        self.assertEqual((config.blue.thinking, config.red.thinking), ("off", "off"))
 
 
 class ThinkingTests(unittest.IsolatedAsyncioTestCase):

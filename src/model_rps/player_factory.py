@@ -5,7 +5,8 @@ from dataclasses import replace
 from pathlib import Path
 
 from .config import RuntimeConfig
-from .players import ChatCompletionPlayer, MODEL_ADAPTERS, configure_thinking
+from .players import ChatCompletionPlayer
+from .adapters import MODEL_ADAPTERS, configure_thinking
 from .human import HumanPlayer
 
 
@@ -40,6 +41,8 @@ def player_keys(settings, path):
         if not all(player.api_key for player in required):
             raise ValueError("TOML 配置必须填写所有模型席位的 api_key；人类席位不需要密钥。")
         return tuple(player.api_key if player.type == "llm" else None for player in settings.seats)
+    if any(player.adapter not in ("openai", "deepseek") for player in required):
+        raise ValueError("新增模型服务请在 TOML 的席位或模型配置中填写 api_key；旧密钥文件仅支持 OpenAI / DeepSeek。")
     deepseek, openai = load_keys(path, required={player.adapter for player in required})
     legacy = {"deepseek": deepseek, "openai": openai}
     return tuple(legacy[player.adapter] if player.type == "llm" else None for player in settings.seats)
@@ -54,9 +57,10 @@ def model_players(client, settings: RuntimeConfig, keys, names):
             continue
         spec = configure_thinking(replace(MODEL_ADAPTERS[config.adapter], model=config.model,
                                           base_url=config.base_url), config.thinking)
+        streaming = settings.streaming_for(config)
         players.append(ChatCompletionPlayer(
             client, spec, key, names=names, max_output_tokens=settings.max_output_tokens,
             analysis=config.analysis,
-            stream=settings.stream, stream_first_timeout=settings.stream_first_timeout_seconds,
-            stream_idle_timeout=settings.stream_idle_timeout_seconds))
+            stream=streaming["stream"], stream_first_timeout=streaming["stream_first_timeout_seconds"],
+            stream_idle_timeout=streaming["stream_idle_timeout_seconds"]))
     return tuple(players)

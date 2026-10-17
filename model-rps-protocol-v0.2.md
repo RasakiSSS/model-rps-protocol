@@ -1,6 +1,6 @@
 # Model RPS — 项目协议 v0.2
 
-当前程序版本：v0.7.0。支持上下文增量传递、赛后沉默与待机恢复、人类 CLI 玩家、独立聊天、消息收件箱与上下文用量记录，以及 Red / Blue 通用席位、同模型对战、独立调试窗口、同时与轮流行动、锁定与改拳模式、BO 比赛、同场上下文保留、赛后聊天、思考设置、TOML 配置及可选流式响应。
+当前程序版本：v0.8.0。支持六种模型适配方案与模型配置条目、上下文增量传递、赛后沉默与待机恢复、人类 CLI 玩家、独立聊天、消息收件箱与上下文用量记录，以及 Red / Blue 通用席位、同模型对战、独立调试窗口、同时与轮流行动、锁定与改拳模式、BO 比赛、同场上下文保留、赛后聊天、思考设置、TOML 配置及可选流式响应。
 
 最后更新：2026-10-17。
 
@@ -324,7 +324,7 @@ analysis 为 off 或 optional 时，单独 `{"actions":[{"type":"ENDTURN"}]}` �
 
 ### 11.3 接口参数
 
-仍使用 Chat Completions 的 JSON 对象输出。两席独立设置 adapter、model、base_url、api_key、thinking；不根据名称猜测参数。max_output_tokens 内置与模板均为 20,000，覆盖对局与赛后聊天，实际参数名由适配器决定。服务不支持参数时明确报错，不自动降级。
+模型正文统一要求 JSON 指令；Chat Completions 请求 JSON 对象输出，Claude 原生 Messages 使用共同提示词与相同解析校验。两席通过 profile 选择模型条目，也可独立设置 adapter、model、base_url、api_key、thinking；不根据名称猜测参数。max_output_tokens 内置与模板均为 20,000，覆盖对局与赛后聊天，实际参数名由适配器决定。服务不支持参数时明确报错，不自动降级。
 
 ## 12. BO 比赛与上下文生命周期
 
@@ -339,7 +339,7 @@ analysis 为 off 或 optional 时，单独 `{"actions":[{"type":"ENDTURN"}]}` �
 - 每场比赛创建两位玩家，并明确清空其对话历史；同场比赛的所有局复用这两位玩家。
 - 每局创建全新的 GameState，继承本场固定的 move_policy。Tick 从 1 开始，出拳清空，当前局的 history 为空，首次请求的当前纠错信息为空。
 - **同一场 BO 内保留上下文**：模型能够记住之前各局的公开交流、最终拳型、结果、比分，以及自己的响应、策略分析和纠错历史，并据此调整策略。
-- 新消息增量提供公开事件和局间结果，不重复追加整局记录；每次 Chat Completions 请求仍发送保留的完整消息列表。该优化减少重复资料，不删除原始交流，不保证上下文停止增长。
+- 新消息增量提供公开事件和局间结果，不重复追加整局记录；每次模型请求仍发送保留的完整消息列表。该优化减少重复资料，不删除原始交流，不保证上下文停止增长。
 - 下一局开始时向双方提供上一局的公开结果。聊天即时公开；同时模式的提交状态仍等双方结束行动后公开。比赛期间对手的策略分析不可见，错误反馈始终不向对手提供。
 - **新比赛清空上下文**，即使程序内部复用玩家对象，也必须清空上一场比赛的历史。日志只供人类查看，不读取日志来构建上下文。
 - 当前保留完整对话历史，不自动截断或摘要；达到服务上下文限制时，按请求技术错误处理（行动中止、赛中聊天跳过、赛后聊天中止），不静默清除记忆。`max_output_tokens` 是单次输出上限，不是整场上下文上限。
@@ -399,7 +399,7 @@ thought.log 使用中文分段文本，按局号、Tick、响应编号、尝试�
 
 ### 15.1 延续本场历史
 
-保留每位玩家自己的全部本场 user/assistant 消息与规则提示。首次请求追加最终结果、各局有效动作与公开分析，公开事件按各席位已保留的边界补齐，并附简短聊天邀请；双方的私有历史不合并，接口思考不回填。对话历史管理使用 Chat Completions 的消息列表方式，见 [OpenAI 会话状态文档](https://developers.openai.com/api/docs/guides/conversation-state)。
+保留每位玩家自己的全部本场 user/assistant 消息与规则提示。首次请求追加最终结果、各局有效动作与公开分析，公开事件按各席位已保留的边界补齐，并附简短聊天邀请；双方的私有历史不合并，接口思考不回填。对话历史统一管理为消息列表，由适配器转换为对应协议；Claude 将规则放入顶层 system，普通对话保持原顺序。
 
 每次请求带 phase=postmatch、player、request_id、event_cursor、events、exited、request_reasons、correction；只有首次邀请包含 match 报告。events 是自上次请求以来的新赛后公开事件，sequence 从 1 递增，kind 为 say 或 exit，发言另带 text。exited 按玩家记录退出状态。快照在同一请求的重试间不变，生成期间的新消息下一次提供。
 
@@ -429,9 +429,11 @@ request_reasons 的值为 postmatch_start（首次邀请）、opponent_event（�
 
 ### 16.1 配置与请求
 
-`--red-thinking`、`--blue-thinking` 分别覆盖该席位的 thinking。合法档位由所选 adapter 决定：deepseek 为 off/low/high/max，openai 为 off/low/medium/high/xhigh/max。thinking 两席内置值均为 off，模板均为 high。两席开关互相独立；同场 BO 的对局和赛后聊天共用配置，不修改裁判规则。旧 --openai-thinking、--deepseek-thinking 分别兼容为 Red、Blue 的参数别名。
+`--red-thinking`、`--blue-thinking` 分别覆盖该席位的 thinking。合法档位由所选 adapter 决定：deepseek 为 off/low/high/max，openai 为 off/low/medium/high/xhigh/max；glm 为 low/high/max，gemini 为 low/medium/high，grok 为 low/medium/high/xhigh，anthropic 为 low/medium/high/xhigh/max。OpenAI / DeepSeek 内置值为 off，新增适配器默认 high，模板均为 high。两席设置互相独立；同场 BO 的对局和赛后聊天共用配置，不修改裁判规则。旧 --openai-thinking、--deepseek-thinking 分别兼容为 Red、Blue 的参数别名。
 
 DeepSeek 开启时发送 `thinking.type="enabled"` 和对应的 `reasoning_effort`；关闭时发送 disabled 并省略 effort。GPT 将 off 映射为 `reasoning_effort="none"`，其余值直接发送。参照 [DeepSeek 思考模式文档](https://api-docs.deepseek.com/guides/thinking_mode/) 和 [GPT-6 Luna 模型文档](https://developers.openai.com/api/docs/models/gpt-6-luna)。当前采用无工具调用的文本接口。
+
+新增适配器按 GLM-5.3、Gemini 4 Argon、Grok 4.7、Claude Sonnet 5.5 的文档配置。Claude 使用原生 Messages 的 adaptive thinking 与 output_config.effort，其余使用各自 Chat Completions 方案。具体映射、鉴权、官方依据和实测限制统一见 [模型适配说明](MODEL_ADAPTERS.md)。
 
 服务不支持所选参数时明确失败，不自动降低级别、关闭思考或切换模型。更换服务或模型标识仍须自行确认参数兼容性。模拟模式指定非 off 思考设置时，在建立日志和发起请求前报配置错误。
 
@@ -439,7 +441,7 @@ DeepSeek 开启时发送 `thinking.type="enabled"` 和对应的 `reasoning_effor
 
 ### 16.2 返回内容与隔离
 
-适配器读取响应消息中非空字符串 `reasoning_content`，其次读取兼容字段 `reasoning`。只保存服务实际返回的文本，不补写、不推测完整思考。普通 assistant 内容仍按原规则进入自己的对话历史；额外思考字段不进入后续请求、对手上下文或赛后公开报告。同场 BO 仍保留公开事件、自己的最终响应、策略分析和纠错记录。
+Chat Completions 读取响应消息中非空字符串 `reasoning_content`，其次读取兼容字段 `reasoning`；Claude 原生 thinking 块转换为统一的私有思考字段，text 块转换为正文，签名与加密思考不作为可读分析。只保存服务实际返回的文本，不补写、不推测完整思考。普通 assistant 内容仍按原规则进入自己的对话历史；额外思考字段不进入后续请求、对手上下文或赛后公开报告。同场 BO 仍保留公开事件、自己的最终响应、策略分析和纠错记录。
 
 接口思考是否返回不改变 ANALYZE 校验，策略分析只按席位 analysis 配置处理。成功行动的 analysis_source 为 analyze 或 none，has_reasoning 单独标记本次是否返回思考文本；summary 是 ANALYZE 文本或 null。两类内容分别记录，不额外请求摘要。
 
@@ -466,20 +468,24 @@ DeepSeek 开启时发送 `thinking.type="enabled"` 和对应的 `reasoning_effor
 
 使用 Python 标准库 `tomllib` 读取 UTF-8 TOML，无新增依赖。默认读取当前工作目录的 `config.toml`；`--config 路径` 指定其他配置，`--no-config` 跳过配置，两者互斥。默认文件不存在时沿用内置值；显式指定的文件不存在、现有文件无法读取或语法错误时返回配置错误。`--help` 不依赖配置有效性。
 
-配置优先级为 **CLI > TOML > 内置默认值**。配置文件本身须合法，字段不明、类型不符等错误不会因为 CLI 覆盖而被忽略。文件中的相对日志路径基于文件所在目录；CLI 的相对日志路径基于工作目录。
+玩家字段优先级为 **CLI > TOML 席位字段 > 选中的 profile > 内置默认值**；流式字段按席位 CLI > 全局 CLI > 席位 TOML > profile > app > 内置值合并。其余为 CLI > TOML > 内置默认值。配置文件本身须合法，字段不明、类型不符等错误不会因为 CLI 覆盖而被忽略。文件中的相对日志路径基于文件所在目录；CLI 的相对日志路径基于工作目录。
 
 | 节 | 允许字段 |
 | --- | --- |
 | `[app]` | mode、log_dir、timeout_seconds、retry_delay_seconds、max_output_tokens、stream、stream_first_timeout_seconds、stream_idle_timeout_seconds |
 | `[match]` | move_policy、best_of、max_games、initiative |
-| `[players.red]` | type、adapter、name（可选）、model、base_url、api_key、thinking、analysis |
-| `[players.blue]` | type、adapter、name（可选）、model、base_url、api_key、thinking、analysis |
+| `[profiles.名称]`，type=llm 或省略 | type、adapter（必填）、name、model、base_url、api_key、thinking、analysis、stream、stream_first_timeout_seconds、stream_idle_timeout_seconds |
+| `[profiles.名称]`，type=human | type、name、analysis |
+| `[models.名称]`（兼容） | 模型 profile 除 type 外的字段 |
+| `[players.red]`、`[players.blue]` | profile 以及模型 profile 的全部字段 |
 
-adapter 支持 openai 和 deepseek，两席可相同；Red 默认 openai，Blue 默认 deepseek。省略模型与地址时按适配器选取默认值，显式填写的值不自动改写。旧 players.gpt/deepseek 分别兼容映射到 red/blue，禁止同一文件混用新旧配置节。其余省略的字段使用内置值。未指定 max_games 时，以最终合并后的 best_of × 10 计算。配置模板采用 GPT-5.6 Sol / DeepSeek Flash、双方 high、BO9、locked、120 秒超时、1 秒重试间隔、20,000 token。内置值保持旧版兼容：GPT-6 Luna / DeepSeek Flash、双方 off、BO1、60 秒超时，其余相同。initiative 默认为 simultaneous，可选实验性 alternating；alternating 与 revisable 的组合在请求及创建日志前被拒绝。每方常规 20 次机会、重试次数、提交可见性和赛后流程仍为固定规则。
+adapter 支持 openai、deepseek、glm、gemini、grok、anthropic，两席可相同。profile 引用 [profiles.名称] 或兼容的 [models.名称]；两类条目共享名称，重复定义在请求前报错。CLI --red-profile / --blue-profile 可选择其他条目，同一模型条目可用于两席，但玩家实例、历史与日志仍独立。不选择 profile 时，Red 默认 openai，Blue 默认 deepseek。省略模型与地址时按适配器选取默认值，显式填写的值不自动改写。切换 profile 后重新取该条目的字段，席位显式覆盖仍有效。未选中模型条目的密钥可为空，但字段仍须合法；条目中不允许 profile 引用或嵌套配置。
 
-type 支持 llm（默认）和 human，CLI 对应 --red-type / --blue-type，一个终端最多一位 human。人类默认显示名为“玩家”，无需模型服务参数；保留的配置字段仍须格式合法。人类席位的 thinking 不生效，实际记录为 off。
+旧 players.gpt/deepseek 分别兼容映射到 red/blue，禁止同一文件混用新旧配置节。其余省略的字段使用内置值。未指定 max_games 时，以最终合并后的 best_of × 10 计算。配置模板默认选择 GPT-5.6 Sol / DeepSeek Flash、双方 high、BO9、locked、120 秒超时、1 秒重试间隔、20,000 token。内置值保持旧版兼容：GPT-6 Luna / DeepSeek Flash、双方 off、BO1、60 秒超时，其余相同。initiative 默认为 simultaneous，可选实验性 alternating；alternating 与 revisable 的组合在请求及创建日志前被拒绝。每方常规 20 次机会、重试次数、提交可见性和赛后流程仍为固定规则。
 
-真实模式仅模型席位需要有效密钥。所有模型席位都省略 api_key 时，兼容读取工作目录的 local_secrets.py；任一模型席位写了 api_key 就要求所有模型席位填写非空值，不混合读取。人类席位的密钥不参与来源选择。显式 --secrets-file 使用指定旧文件覆盖 TOML 密钥；仅按模型席位实际 adapter 读取 OPENAI_API_KEY 或 DEEPSEEK_API_KEY。两席使用同一适配器时可使用同一把密钥。模板中的空字符串只作为待填写位置，不能启动真实请求。demo 可以不填密钥，非人类席位 thinking 必须为 off；人类可以与预设模拟玩家练习。
+type 支持 llm（默认）和 human，可在 profiles 或席位配置，CLI 对应 --red-type / --blue-type。模板提供 human profile，任一席位通过 profile="human" 或对应 --red-profile / --blue-profile 选择；一个终端最多一位 human。席位未写 type 时继承 profile，显式填写时覆盖 profile。人类 profile 只保存类型、昵称与分析要求；旧方式仍可在席位上保留合法模型字段。人类无需密钥，默认显示名为“玩家”，省略 analysis 时为 optional；thinking 和 stream 实际记录为 off / false，不限制终端输入等待。
+
+真实模式仅模型席位需要有效密钥。模型条目与席位合并后，所有模型席位都省略 api_key 且只使用 OpenAI / DeepSeek 时，兼容读取工作目录的 local_secrets.py；任一模型席位写了 api_key 就要求所有模型席位填写非空值，不混合读取。人类席位的密钥不参与来源选择。显式 --secrets-file 使用指定旧文件覆盖 TOML 密钥，仅支持按 adapter 读取 OPENAI_API_KEY 或 DEEPSEEK_API_KEY；新增适配器要求 TOML 密钥。两席使用同一适配器时可使用同一把密钥。选中条目的空密钥不能启动真实请求。demo 可以不填密钥，非人类席位 thinking 必须为 off；建议 --no-config --mode demo，人类可以与预设模拟玩家练习。
 
 实际 config.toml、config.local.toml、secrets.toml 和旧 local_secrets.py 均被 Git 忽略。config.example.toml 可提交，不含真实密钥。程序不记录完整配置或鉴权头；解析错误不回显原始内容。比赛开始记录实际 BO、总局数上限、模式、思考与分析设置、超时、重试间隔、initiative 和输出上限，便于核对实验条件。
 
@@ -489,13 +495,15 @@ type 支持 llm（默认）和 human，CLI 对应 --red-type / --blue-type，一
 
 ## 18. 可选流式响应
 
-`app.stream` 为布尔值，默认 false；CLI `--stream` / `--no-stream` 覆盖配置。双方对局和赛后聊天共用开关，模拟玩家不发起流式请求。非流式路径保留，服务拒绝流式参数时不自动回退。流式请求发送 `stream=true` 与 `stream_options.include_usage=true`，按 [Chat Completions 流式事件](https://developers.openai.com/api/reference/resources/chat/subresources/completions/streaming-events) 读取 SSE。
+`app.stream` 为布尔值，默认 false；模型 profile 或席位可独立覆盖 stream、stream_first_timeout_seconds、stream_idle_timeout_seconds。缺省逐字段继承，不以真值判断是否覆盖。CLI `--stream` / `--no-stream` 覆盖双方配置，席位参数 `--red-stream` / `--no-red-stream` 和对应 blue 参数优先级更高。每席自己的对局、独立聊天与赛后聊天共用设置，双方可混用流式和非流式；人类和模拟玩家不发起流式请求。非流式路径保留，服务拒绝流式参数时不自动回退。Chat Completions 流式请求发送 `stream=true` 与 `stream_options.include_usage=true`，按 [Chat Completions 流式事件](https://developers.openai.com/api/reference/resources/chat/subresources/completions/streaming-events) 读取 SSE。Claude 原生 Messages 只发送 stream=true，使用独立事件组装器。
 
 接收器按事件边界解析 data，支持传输分片、UTF-8 跨字节分片、CRLF、多行 data、注释心跳、空 role 片段及 choices 为空的用量尾包。只接受 index=0 的单条文本响应；合并 content、reasoning_content 和 reasoning。思考字段不进入后续对话。缺失 usage 保留 null，不根据片段数量推算 token。
 
-必须取得 finish_reason=stop 和 `[DONE]`，再对完整正文执行现有 JSON、动作或赛后聊天校验。中间内容永不执行；长度截断、拒绝、非法事件、EOF 或连接中断都使当前请求失败。重试使用原快照与原额度，成功的对手不重复请求；失败流的正文与思考片段不回填模型历史，各次尝试独立组装。取消会关闭响应连接；日志故障直接停止，不重试。
+Chat Completions 必须取得 finish_reason=stop 和 `[DONE]`；Claude 必须按顺序收到开始、内容块、stop_reason=end_turn 和 message_stop。再对完整正文执行现有 JSON、动作或赛后聊天校验。中间内容永不执行；长度截断、拒绝、非法事件、EOF 或连接中断都使当前请求失败。重试使用原快照与原额度，成功的对手不重复请求；失败流的正文与思考片段不回填模型历史，各次尝试独立组装。取消会关闭响应连接；日志故障直接停止，不重试。
 
-首个有效 SSE 数据事件的等待由 `stream_first_timeout_seconds` 限制，默认 60 秒并包含连接和响应头；后续事件间的等待由 `stream_idle_timeout_seconds` 限制，默认 30 秒。CLI 对应 `--stream-first-timeout`、`--stream-idle-timeout`。注释心跳不重置等待时限。原有 timeout_seconds 始终限制整次请求，即使持续收到事件也不能无限延长。
+首个有效 SSE 数据事件的等待由 `stream_first_timeout_seconds` 限制，默认 60 秒并包含连接和响应头；后续事件间的等待由 `stream_idle_timeout_seconds` 限制，默认 30 秒。CLI 对应 `--stream-first-timeout`、`--stream-idle-timeout`，也有 --red-stream-first-timeout / --red-stream-idle-timeout 及 blue 参数用于单席覆盖。注释心跳和 Claude ping 不重置等待时限。app.timeout_seconds 仍统一限制整次模型请求，即使持续收到事件也不能无限延长。
+
+match_start 的原有流式字段保留全局默认设置，新增 player_streaming 按席位记录生效设置；各次 request_config 记录实际发送的开关与等待时限。配置中的非法布尔值、非正时限或非有限时限在请求前拒绝，包括未选中的 profile。
 
 前台始终隐藏流式进度，开启 --debug 后在独立窗口报告等待、思考接收和正文接收阶段，不公开片段或影响模型可见状态。接口思考逐步写入私有 thought.log，正文与思考分片以 stream_delta 写入对应 debug.log；stream_end 记录完成、未完成或取消、组装内容、结束原因及可用用量。接收完整不代表通过校验。原 reasoning 结构化记录继续保留，阅读版以状态和用量结束，不重复正文。已知密钥跨分片匹配后脱敏，未完成的密钥前缀暂缓写入，结束时遮盖。
 

@@ -21,7 +21,8 @@ from .diagnostics import LogError
 from .logs import RunLogs
 from .identities import player_names
 from .match import MatchConfig, MatchStatus, run_match
-from .players import MODEL_ADAPTERS, demo_players
+from .players import demo_players
+from .adapters import MODEL_ADAPTERS
 from .commands import AnalysisPolicy
 from .postmatch import MatchArchive, run_postmatch
 from .runner import RequestPolicy
@@ -42,10 +43,10 @@ def make_parser(config: dict | None = None) -> argparse.ArgumentParser:
                         help="模拟场景，默认随出拳规则选择 locked 或 change")
     parser.add_argument("--secrets-file", type=Path, help="兼容旧版：从指定 Python 文件读取模型席位所需密钥，覆盖 TOML 密钥")
     parser.add_argument("--timeout", type=float, default=RequestPolicy().timeout, help="每次模型请求的总超时秒数；不限制人类输入等待")
-    parser.add_argument('--stream', action=argparse.BooleanOptionalAction, default=False,
-                        help='启用流式响应；--no-stream 使用非流式（默认），对局与赛后聊天共用')
-    parser.add_argument('--stream-first-timeout', type=float, default=60, help='流式首包等待上限秒数，默认 60')
-    parser.add_argument('--stream-idle-timeout', type=float, default=30, help='流式数据事件之间的等待上限秒数，默认 30')
+    parser.add_argument('--stream', action=argparse.BooleanOptionalAction, default=None,
+                        help='覆盖双方流式设置；--no-stream 关闭；未指定时按席位/profile/app 继承，内置 false')
+    parser.add_argument('--stream-first-timeout', type=float, default=None, help='覆盖双方流式首包等待上限秒数，内置 60')
+    parser.add_argument('--stream-idle-timeout', type=float, default=None, help='覆盖双方流式数据事件间的等待上限秒数，内置 30')
     parser.add_argument("--retry-delay", type=float, default=1, help="真实模式重试间隔秒数，默认 1")
     parser.add_argument("--max-output-tokens", type=int, default=20000, help="对局与赛后聊天单次输出上限，默认 20000")
     parser.add_argument("--initiative", choices=("simultaneous", "alternating"), default="simultaneous",
@@ -53,16 +54,23 @@ def make_parser(config: dict | None = None) -> argparse.ArgumentParser:
     parser.add_argument("--bo", type=int, default=1, help="正奇数；BO N 先赢 N//2+1 局，默认 BO1")
     parser.add_argument("--max-games", type=int, help="包含平局的实际总局数上限，默认 10×BO")
     parser.add_argument("--log-dir", type=Path, default=Path("logs"), help="日志根目录，默认 logs")
-    for seat, old, adapter in (("red", "openai", "openai"), ("blue", "deepseek", "deepseek")):
-        parser.add_argument(f"--{seat}-type", choices=("llm", "human"), default="llm",
+    for seat, old in (("red", "openai"), ("blue", "deepseek")):
+        parser.add_argument(f"--{seat}-profile", help=f"{seat.title()} 使用的 [profiles.名称]；兼容 [models.名称]")
+        parser.add_argument(f"--{seat}-stream", action=argparse.BooleanOptionalAction, default=None,
+                            help=f"仅覆盖 {seat.title()} 的流式开关，优先于 --stream / --no-stream")
+        parser.add_argument(f"--{seat}-stream-first-timeout", type=float,
+                            help=f"仅覆盖 {seat.title()} 的流式首包等待上限秒数")
+        parser.add_argument(f"--{seat}-stream-idle-timeout", type=float,
+                            help=f"仅覆盖 {seat.title()} 的流式空闲等待上限秒数")
+        parser.add_argument(f"--{seat}-type", choices=("llm", "human"), default=None,
                             help=f"{seat.title()} 玩家类型；一个终端最多一位 human，其余使用 llm")
-        parser.add_argument(f"--{seat}-adapter", choices=tuple(MODEL_ADAPTERS), default=adapter,
+        parser.add_argument(f"--{seat}-adapter", choices=tuple(MODEL_ADAPTERS), default=None,
                             help=f"{seat.title()} 使用的请求参数方案，与模型名和席位无关")
         parser.add_argument(f"--{seat}-analysis", choices=tuple(AnalysisPolicy), default=None,
                             help=f"{seat.title()} 的策略分析：off/optional/required；人类默认 optional，模型默认 required")
         for key in ("base-url", "model", "name", "thinking"):
             parser.add_argument(f"--{seat}-{key}", f"--{old}-{key}", dest=f"{seat}_{key.replace('-', '_')}",
-                                default="off" if key == "thinking" else None,
+                                default=None,
                                 help=f"{seat.title()} 的 {key}；旧参数 --{old}-{key} 仍兼容")
         parser.set_defaults(**{f"{seat}_api_key": None})
     if config:
@@ -120,7 +128,9 @@ async def play(args: argparse.Namespace) -> int:
                        analysis={"A": settings.red.analysis, "B": settings.blue.analysis},
                        max_output_tokens=settings.max_output_tokens, stream=settings.stream, debug=args.debug,
                        stream_first_timeout_seconds=settings.stream_first_timeout_seconds,
-                       stream_idle_timeout_seconds=settings.stream_idle_timeout_seconds)
+                       stream_idle_timeout_seconds=settings.stream_idle_timeout_seconds,
+                       player_streaming={seat: settings.streaming_for(player)
+                                         for seat, player in zip(("A", "B"), settings.seats)})
 
         def start(number):
             console.game, console.tick = number, 0

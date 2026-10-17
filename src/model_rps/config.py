@@ -9,16 +9,22 @@ import tomllib
 import unicodedata
 from urllib.parse import urlsplit
 
-from .players import DEEPSEEK_THINKING_MODES, OPENAI_THINKING_MODES, MODEL_ADAPTERS
+from .adapters import THINKING_MODES, MODEL_ADAPTERS
 from .commands import AnalysisPolicy
 
 
 CONFIG_PATH = Path("config.toml")
-_SECTIONS = {"app", "match", "players"}
+_SECTIONS = {"app", "match", "players", "models", "profiles"}
+_STREAM_ARGS = {"stream": "stream", "stream_first_timeout_seconds": "stream_first_timeout",
+                "stream_idle_timeout_seconds": "stream_idle_timeout"}
+_STREAM_DEFAULTS = {"stream": False, "stream_first_timeout_seconds": 60, "stream_idle_timeout_seconds": 30}
 _APP = {"mode", "log_dir", "timeout_seconds", "retry_delay_seconds", "max_output_tokens",
         "stream", "stream_first_timeout_seconds", "stream_idle_timeout_seconds"}
 _MATCH = {"move_policy", "best_of", "max_games", "initiative"}
-_PLAYER = {"type", "adapter", "name", "model", "base_url", "api_key", "thinking", "analysis"}
+_PLAYER = {"type", "adapter", "name", "model", "base_url", "api_key", "thinking", "analysis", "profile"} | _STREAM_ARGS.keys()
+_MODEL = _PLAYER - {"type", "profile"}
+_PROFILE = _PLAYER - {"profile"}
+_HUMAN_PROFILE = {"type", "name", "analysis"}
 
 
 def text_value(value, location: str, *, empty: bool = False) -> None:
@@ -36,6 +42,14 @@ def number_value(value, location: str, *, integer: bool = False, zero: bool = Fa
         valid = False
     if not valid:
         raise ValueError(f"{location} 必须是{'非负' if zero else '正'}{'整数' if integer else '有限数值'}。")
+
+
+def stream_value(key, value, location):
+    if key == "stream":
+        if type(value) is not bool:
+            raise ValueError(f"{location} 必须为布尔值。")
+    else:
+        number_value(value, location)
 
 
 def choice_value(value, choices, location: str) -> None:
@@ -66,6 +80,9 @@ class PlayerConfig:
     adapter: str = "openai"
     analysis: str = "required"
     type: str = "llm"
+    stream: bool | None = None
+    stream_first_timeout_seconds: float | None = None
+    stream_idle_timeout_seconds: float | None = None
 
     @property
     def display_name(self) -> str:
@@ -93,6 +110,14 @@ class RuntimeConfig:
     def seats(self) -> tuple[PlayerConfig, PlayerConfig]:
         return self.red, self.blue
 
+    def streaming_for(self, player: PlayerConfig) -> dict:
+        """返回该席位实际使用的流式设置；未覆盖的字段继承 app 默认值。"""
+        values = {key: getattr(self, key) if getattr(player, key) is None else getattr(player, key)
+                  for key in _STREAM_ARGS}
+        if player.type == "human":
+            values["stream"] = False
+        return values
+
     @classmethod
     def from_args(cls, args) -> RuntimeConfig:
         choice_value(args.mode, ("live", "demo"), "mode")
@@ -103,10 +128,12 @@ class RuntimeConfig:
         number_value(args.timeout, "请求超时")
         number_value(args.retry_delay, "retry_delay_seconds", zero=True)
         number_value(args.max_output_tokens, "max_output_tokens", integer=True)
-        if type(args.stream) is not bool:
-            raise ValueError("stream 必须为布尔值。")
-        number_value(args.stream_first_timeout, "stream_first_timeout_seconds")
-        number_value(args.stream_idle_timeout, "stream_idle_timeout_seconds")
+        stream_defaults = dict(_STREAM_DEFAULTS)
+        stream_defaults.update(getattr(args, "_stream_defaults", {}))
+        for key, argument in _STREAM_ARGS.items():
+            if getattr(args, argument, None) is not None:
+                stream_defaults[key] = getattr(args, argument)
+            stream_value(key, stream_defaults[key], key)
         number_value(args.bo, "best_of", integer=True)
         if args.bo % 2 != 1:
             raise ValueError("best_of 必须为正奇数。")
@@ -116,16 +143,35 @@ class RuntimeConfig:
                 raise ValueError("max_games 不能小于目标胜局数。")
         players = []
         for prefix in ("red", "blue"):
-            kind = getattr(args, f"{prefix}_type")
+            profile = getattr(args, f"{prefix}_profile", None)
+            profiles = getattr(args, "_player_profiles", {})
+            if profile is not None and profile not in profiles:
+                raise ValueError(f"{prefix}.profile 未在 [profiles] 或兼容的 [models] 中定义。")
+            selected = dict(profiles.get(profile, {}))
+            selected.update({key: getattr(args, f"{prefix}_{key}", None) for key in _PLAYER
+                             if key not in {"profile", *_STREAM_ARGS} and getattr(args, f"{prefix}_{key}", None) is not None})
+            selected.update(getattr(args, f"_{prefix}_stream_defaults", {}))
+            for key, argument in _STREAM_ARGS.items():
+                # 显式 CLI 高于配置；席位 CLI 又高于全局 CLI。False 也是显式覆盖。
+                for cli_name in (argument, f"{prefix}_{argument}"):
+                    value = getattr(args, cli_name, None)
+                    if value is not None:
+                        selected[key] = value
+                if key in selected:
+                    stream_value(key, selected[key], f"{prefix}.{key}")
+            if args.secrets_file is not None:
+                selected["api_key"] = None
+            kind = selected.get("type", "llm")
             choice_value(kind, ("llm", "human"), f"{prefix}.type")
-            adapter = getattr(args, f"{prefix}_adapter")
+            adapter = selected.get("adapter", "openai" if prefix == "red" else "deepseek")
             choice_value(adapter, MODEL_ADAPTERS, f"{prefix}.adapter")
             spec = MODEL_ADAPTERS[adapter]
-            choices = OPENAI_THINKING_MODES if adapter == "openai" else DEEPSEEK_THINKING_MODES
-            model, url, thinking, name, key = (getattr(args, f"{prefix}_{key}") for key in
-                                             ("model", "base_url", "thinking", "name", "api_key"))
+            choices = THINKING_MODES[adapter]
+            model, url, thinking, name, key = (selected.get(key) for key in
+                                              ("model", "base_url", "thinking", "name", "api_key"))
             model = spec.model if model is None else model
             url = spec.base_url if url is None else url
+            thinking = spec.thinking_mode if thinking is None else thinking
             text_value(model, f"{prefix}.model")
             url_value(url, f"{prefix}.base_url")
             choice_value(thinking, choices, f"{prefix}.thinking")
@@ -137,14 +183,15 @@ class RuntimeConfig:
                 raise ValueError("此模型标识需要设置独立的显示名称。")
             if key is not None and kind != "human":
                 text_value(key, f"{prefix}.api_key", empty=args.mode == "demo")
-            analysis = getattr(args, f"{prefix}_analysis") or ("optional" if kind == "human" else "required")
+            analysis = selected.get("analysis") or ("optional" if kind == "human" else "required")
             choice_value(analysis, tuple(AnalysisPolicy), f"{prefix}.analysis")
-            players.append(PlayerConfig(model, url, thinking, name, key, adapter, analysis, kind))
+            players.append(PlayerConfig(model, url, thinking, name, key, adapter, analysis, kind,
+                                        **{key: selected.get(key) for key in _STREAM_ARGS}))
         if sum(player.type == "human" for player in players) > 1:
             raise ValueError("一个终端目前只支持一位人类玩家，请将另一席位设为 llm。")
         return cls(args.mode, args.timeout, args.retry_delay, args.max_output_tokens, Path(args.log_dir),
                    args.bo, args.max_games, args.move_policy, args.initiative, *players,
-                   args.stream, args.stream_first_timeout, args.stream_idle_timeout)
+                   **stream_defaults)
 
 
 def _table(data: dict, name: str) -> dict:
@@ -159,6 +206,26 @@ def _check_keys(data: dict, allowed: set[str], location: str) -> None:
     if unknown:
         # 不回显任意未知键；错误配置可能把密钥误填到了键名中。
         raise ValueError(f"{location} 包含未知配置项，请对照 config.example.toml 检查拼写。")
+
+
+def _validate_player_fields(player, allowed, location, default_adapter):
+    _check_keys(player, allowed, location)
+    for key, value in player.items():
+        if key in _STREAM_ARGS:
+            stream_value(key, value, f"{location}.{key}")
+        else:
+            text_value(value, f"{location}.{key}", empty=key == "api_key")
+    if "base_url" in player:
+        url_value(player["base_url"], f"{location}.base_url")
+    adapter = player.get("adapter", default_adapter)
+    if adapter is not None:
+        choice_value(adapter, MODEL_ADAPTERS, f"{location}.adapter")
+    if "type" in player:
+        choice_value(player["type"], ("llm", "human"), f"{location}.type")
+    if "analysis" in player:
+        choice_value(player["analysis"], tuple(AnalysisPolicy), f"{location}.analysis")
+    if "thinking" in player:
+        choice_value(player["thinking"], THINKING_MODES[adapter], f"{location}.thinking")
 
 
 def load_config(path: Path = CONFIG_PATH, *, required: bool = False) -> dict:
@@ -179,30 +246,38 @@ def load_config(path: Path = CONFIG_PATH, *, required: bool = False) -> dict:
     app = _table(data, "app")
     match = _table(data, "match")
     players = _table(data, "players")
+    models = _table(data, "models")
+    profiles = _table(data, "profiles")
     _check_keys(app, _APP, "[app]")
     _check_keys(match, _MATCH, "[match]")
     _check_keys(players, {"red", "blue", "gpt", "deepseek"}, "[players]")
     if set(players) & {"red", "blue"} and set(players) & {"gpt", "deepseek"}:
         raise ValueError("请统一使用 players.red/blue；不能与旧版 players.gpt/deepseek 混用。")
     legacy = bool(set(players) & {"gpt", "deepseek"})
+    for profile in models.values():
+        if not isinstance(profile, dict) or "adapter" not in profile:
+            raise ValueError("每个 [models.名称] 必须是模型配置表，并填写 adapter。")
+        _validate_player_fields(profile, _MODEL, "模型配置", None)
+    for profile in profiles.values():
+        if not isinstance(profile, dict):
+            raise ValueError("每个 [profiles.名称] 必须是玩家配置表。")
+        kind = profile.get("type", "llm")
+        choice_value(kind, ("llm", "human"), "profile.type")
+        if kind == "llm" and "adapter" not in profile:
+            raise ValueError("模型 profile 必须填写 adapter。")
+        _validate_player_fields(profile, _HUMAN_PROFILE if kind == "human" else _PROFILE, "玩家配置", None)
+    if models.keys() & profiles.keys():
+        raise ValueError("[models] 与 [profiles] 不能定义同名条目，请使用唯一的 profile 名称。")
+    profiles = {**models, **profiles}
     for name in players:
         player = _table(players, name)
-        _check_keys(player, _PLAYER, f"[players.{name}]")
-        for key, value in player.items():
-            text_value(value, f"players.{name}.{key}", empty=key == "api_key")
-        if "base_url" in player:
-            url_value(player["base_url"], f"players.{name}.base_url")
-        if "adapter" in player:
-            choice_value(player["adapter"], MODEL_ADAPTERS, f"players.{name}.adapter")
-        if "type" in player:
-            choice_value(player["type"], ("llm", "human"), f"players.{name}.type")
-        if "analysis" in player:
-            choice_value(player["analysis"], tuple(AnalysisPolicy), f"players.{name}.analysis")
-        if "thinking" in player:
-            adapter = player.get("adapter", "openai" if name in ("red", "gpt") else "deepseek")
-            choices = OPENAI_THINKING_MODES if adapter == "openai" else DEEPSEEK_THINKING_MODES
-            choice_value(player["thinking"], choices, f"players.{name}.thinking")
-        # 合并 CLI 后还需按最终适配器再次校验。
+        profile = player.get("profile")
+        if profile is not None:
+            text_value(profile, f"players.{name}.profile")
+            if profile not in profiles:
+                raise ValueError(f"players.{name}.profile 未在 [profiles] 或兼容的 [models] 中定义。")
+        default = profiles.get(profile, {}).get("adapter", "openai" if name in ("red", "gpt") else "deepseek")
+        _validate_player_fields(player, _PLAYER, f"players.{name}", default)
     for key, value in app.items():
         if key == 'stream':
             if type(value) is not bool:
@@ -225,6 +300,8 @@ def load_config(path: Path = CONFIG_PATH, *, required: bool = False) -> dict:
     if "best_of" in match and match["best_of"] % 2 != 1:
         raise ValueError("match.best_of 必须为正奇数。")
     result = {}
+    if profiles:
+        result["profiles"] = profiles
     result.update({"mode": app.get("mode"), "timeout": app.get("timeout_seconds"),
                    "stream": app.get("stream"),
                    "stream_first_timeout": app.get("stream_first_timeout_seconds"),
@@ -246,16 +323,20 @@ def load_config(path: Path = CONFIG_PATH, *, required: bool = False) -> dict:
 def parser_defaults(config: dict) -> dict:
     """将扁平配置转换为 argparse 默认值；API key 不会出现在帮助或日志中。"""
     defaults = {}
+    if "profiles" in config:
+        defaults["_player_profiles"] = config["profiles"]
     mapping = {"mode": "mode", "timeout": "timeout", "bo": "bo", "max_games": "max_games",
                "move_policy": "move_policy", "log_dir": "log_dir", "retry_delay": "retry_delay",
-               "max_output_tokens": "max_output_tokens", "initiative": "initiative",
-               "stream": "stream", "stream_first_timeout": "stream_first_timeout",
-               "stream_idle_timeout": "stream_idle_timeout"}
+               "max_output_tokens": "max_output_tokens", "initiative": "initiative"}
     for source, target in mapping.items():
         if source in config:
             defaults[target] = config[source]
+    defaults["_stream_defaults"] = {key: config[argument] for key, argument in _STREAM_ARGS.items()
+                                    if argument in config}
     for seat in ("red", "blue"):
+        defaults[f"_{seat}_stream_defaults"] = {key: value for key, value in config.get(seat, {}).items()
+                                                if key in _STREAM_ARGS and value is not None}
         for key, value in config.get(seat, {}).items():
-            if value is not None:
+            if value is not None and key not in _STREAM_ARGS:
                 defaults[f"{seat}_{key}"] = value
     return defaults

@@ -1,5 +1,6 @@
-# 复制为 config.toml 并填写模型席位的 api_key。实际配置已被 Git 忽略。
-# 命令行参数 > 本文件 > 内置默认值；只写需要覆盖的字段即可。
+# 复制为 config.toml，在需要使用的模型 profile 中填写 api_key；实际配置已被 Git 忽略。
+# 玩家字段优先级：命令行 > players 席位字段 > 选中的 profile > 内置默认值。
+# 流式字段优先级：席位 CLI > 全局 CLI > 席位配置 > profile > app > 内置值。
 
 [app]
 mode = "live"                       # live / demo
@@ -7,7 +8,7 @@ log_dir = "logs"                     # 相对于本配置文件；CLI --log-dir 
 timeout_seconds = 120               # 仅限制模型请求，不限制人类输入等待
 retry_delay_seconds = 1
 max_output_tokens = 20000            # 对局与赛后聊天共用，包含思考生成额度
-stream = false                      # true 启用流式；收到完整响应后才执行动作
+stream = false                      # 流式默认值；模型 profile 或席位可分别覆盖
 stream_first_timeout_seconds = 60    # 首个数据事件等待上限，含连接时间
 stream_idle_timeout_seconds = 30     # 后续数据事件间的等待上限；timeout_seconds 仍限制总时长
 
@@ -18,27 +19,72 @@ best_of = 9                          # 正奇数，BO9 先胜5局
 initiative = "simultaneous"          # alternating 为实验性轮流行动，仅支持 locked
 
 [players.red]
-type = "llm"                       # llm / human；一个终端最多一位 human
-adapter = "openai"                  # openai / deepseek；决定请求参数，与席位无关
-model = "gpt-5.6-sol"
+profile = "gpt"                      # 引用下方 profiles.gpt，也可选择 human
 # name = "GPT-5.6 Sol"               # 显示为 Red · 名称；省略时使用 model
+# thinking = "high"                  # 可在席位上覆盖模型条目的设置
+# analysis = "optional"              # off / optional / required；独立于思考设置
+
+[players.blue]
+profile = "deepseek"
+
+[profiles.gpt]
+# type = "llm"                       # 省略时为 llm；席位不写 type 时继承 profile
+adapter = "openai"
+model = "gpt-5.6-sol"
 base_url = "https://ai.yuhuantin.icu/v1"
 api_key = ""                         # 填写该服务的密钥
 thinking = "high"                    # off / low / medium / high / xhigh / max
-analysis = "required"                # off / optional / required；独立于思考设置
 
-[players.blue]
-type = "llm"
-adapter = "deepseek"                # 两席可使用完全相同的 adapter、model、地址和密钥
+[profiles.deepseek]
+adapter = "deepseek"
 model = "deepseek-flash"
-# name = "DeepSeek"
 base_url = "https://api.deepseek.com"
 api_key = ""
 thinking = "high"                    # off / low / high / max
-analysis = "required"                # required 时每次行动必须提交 ANALYZE
 
-# 同模型对战：将 red 的 adapter、model、base_url、api_key 复制到 blue。
+# 以下为可选条目；未选择的模型可以暂不填密钥。
+# GLM / Gemini 使用官方 OpenAI 兼容地址；换第三方时同时修改地址、模型与密钥。
+[profiles.glm]
+adapter = "glm"
+model = "glm-5.3"
+base_url = "https://api.z.ai/api/paas/v4"
+api_key = ""
+thinking = "high"                    # low / high / max
+stream = true                       # 仅此模型启用流式
+
+[profiles.gemini]
+adapter = "gemini"
+model = "gemini-4-argon"
+base_url = "https://generativelanguage.googleapis.com/v1beta/openai"
+api_key = ""
+thinking = "high"                    # low / medium / high
+stream_first_timeout_seconds = 90    # 未填写 stream 时继承 app；等待时限可单独设置
+stream_idle_timeout_seconds = 40     # app.timeout_seconds 仍限制整次请求
+
+[profiles.grok]
+adapter = "grok"
+model = "grok-4.7"
+base_url = "https://api.x.ai/v1"
+api_key = ""
+thinking = "high"                    # low / medium / high / xhigh
+stream = false                      # 可按所用服务的兼容性单独关闭流式
+
+[profiles.claude]
+adapter = "anthropic"                # 原生 Messages；服务须支持 /v1/messages
+model = "claude-sonnet-5-5"
+base_url = "https://api.anthropic.com/v1"
+api_key = ""
+thinking = "high"                    # low / medium / high / xhigh / max
+
+[profiles.human]
+type = "human"                      # 一个终端最多一位人类玩家
+name = "玩家"                       # 改为你的用户名
+analysis = "optional"               # off / optional / required
+
+# 同模型对战：red / blue 使用同一个 profile；也可用 --red-profile / --blue-profile 临时选择。
 # thinking 可以相同，也可以分别设置；双方始终保持独立历史和日志。
-# 人类玩家：将其中一席 type 改为 "human"，name 改为用户名，analysis 改为 "optional"。
-# 人类席位无需 api_key，可省略 adapter、model、base_url 和 thinking；这些字段若保留仍需合法。
+# 人类玩家：将其中一席 profile 改为 "human"，或使用 --red-profile human / --blue-profile human。
+# 席位显式填写的 type 优先；希望跟随 profile 切换类型时，请省略席位的 type。
+# 人类 profile 只填写 type、name、analysis；不需要模型服务、密钥或流式参数。
+# 原有 [models.名称] 仍兼容模型条目，与 profiles 共享名称，不能同名。
 # analysis 省略时，模型默认 required，人类默认 optional；显式填写的值不会随 type 自动改变。
