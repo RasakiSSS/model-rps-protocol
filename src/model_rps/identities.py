@@ -11,7 +11,8 @@ SEAT_DIRECTORIES = {"A": "red", "B": "blue"}
 def named_data(value, names: dict[str, str], field: str | None = None):
     """转换结构化身份、比分与身份索引，不替换 SAY/说明/HTTP 原文中的文本。"""
     if isinstance(value, dict):
-        return {names.get(key, key): named_data(item, names, key) for key, item in value.items()}
+        return {names.get(key, key): (value["actor"] if key == "player" and value.get("actor")
+                                     else named_data(item, names, key)) for key, item in value.items()}
     if isinstance(value, (list, tuple)):
         if field == "wins" and len(value) == 2:
             return {names["A"]: value[0], names["B"]: value[1]}

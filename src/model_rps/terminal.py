@@ -24,8 +24,9 @@ def supports_color() -> bool:
                 and kernel.SetConsoleMode(handle, mode.value | 0x0004))
 
 
-def color_names(text: str, names: dict[str, str]) -> str:
+def color_names(text: str, names: dict[str, str], *, aliases: dict[str, str] | None = None) -> str:
     colors = {names[seat]: color for seat, color in (("A", "91"), ("B", "94")) if seat in names}
+    colors.update({name: "91" if seat == "A" else "94" for name, seat in (aliases or {}).items()})
     if not colors:
         return text
     pattern = "|".join(re.escape(name) for name in sorted(colors, key=len, reverse=True))

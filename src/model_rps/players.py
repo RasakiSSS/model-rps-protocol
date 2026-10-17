@@ -126,6 +126,10 @@ class ChatCompletionPlayer:
         # 每个玩家持有独立副本，不能通过共享可变字典影响对手视图。
         self._match_context = json.loads(json.dumps(context, ensure_ascii=False))
 
+    def receive_handoff(self, context):
+        message = {"role": "user", "content": json.dumps(named_data(context, self.names), ensure_ascii=False)}
+        self._history.receive_handoff(context, message)
+
     async def respond(self, view: PlayerView, feedback: str | None = None) -> ModelResponse:
         self._messages[0] = {"role": "system", "content": game_prompt(view.move_policy, view.initiative, self.analysis_policy)}
         context = self._history.game_context(view, self._match_context, feedback)
@@ -221,6 +225,10 @@ class ScriptedPlayer:
         self.requests: list[tuple[PlayerView, str | None]] = []
         self.chat_requests: list[tuple[PlayerView, str | None]] = []
         self.game_contexts: list[dict] = []
+        self.handoff = None
+
+    def receive_handoff(self, context):
+        self.handoff = json.loads(json.dumps(context, ensure_ascii=False))
 
     def start_game(self, context: dict) -> None:
         self.game_contexts.append(json.loads(json.dumps(context, ensure_ascii=False)))

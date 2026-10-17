@@ -14,14 +14,12 @@ from .identities import SEAT_DIRECTORIES, named_data
 class RunLogs:
     def __init__(self, root: Path, *, secrets: tuple[str, ...] = (), names: dict[str, str] | None = None) -> None:
         self._stack = ExitStack()
-        self._secrets = tuple(sorted({value.strip() for value in secrets if value.strip()}, key=len, reverse=True))
+        self._secrets = ()
+        self.add_secrets(*secrets)
         self.path = root / (datetime.now().strftime("%Y%m%d_%H%M%S_%f") + "_" + uuid4().hex[:8])
         self._files = {}
         self._stream_tails = {}
         self._stream_layout = {}
-        self._secret_forms = tuple(sorted({form for secret in self._secrets for form in
-                                          (secret, json.dumps(secret)[1:-1],
-                                           json.dumps(secret, ensure_ascii=False)[1:-1])}, key=len, reverse=True))
         self.names = dict(names) if names is not None else None
         try:
             self.path.mkdir(parents=True, exist_ok=False)
@@ -37,6 +35,14 @@ class RunLogs:
 
     def _open(self, path: Path):
         return self._stack.enter_context(path.open("x", encoding="utf-8", errors="backslashreplace"))
+
+    def add_secrets(self, *values):
+        """接管者可能从旧密钥文件加载；在其任何请求或输出之前加入脱敏表。"""
+        self._secrets = tuple(sorted({*self._secrets, *(v.strip() for v in values if v and v.strip())},
+                                    key=len, reverse=True))
+        self._secret_forms = tuple(sorted({form for secret in self._secrets for form in
+                                          (secret, json.dumps(secret)[1:-1],
+                                           json.dumps(secret, ensure_ascii=False)[1:-1])}, key=len, reverse=True))
 
     def redact(self, text: str) -> str:
         for secret in self._secrets:

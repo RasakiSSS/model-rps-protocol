@@ -89,6 +89,10 @@ async def run_match(
             else:
                 wins[0 if state.result.winner == "A" else 1] += 1
         scores = tuple(wins)
+        for player in (a, b):
+            finish = getattr(player, "finish_game", None)
+            if finish is not None:
+                finish(number, state)
         if on_end:
             on_end(number, state, scores, draws)
         if state.result.reason == EndReason.TECHNICAL_ERROR:
