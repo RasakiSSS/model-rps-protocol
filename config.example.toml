@@ -1,56 +1,158 @@
-# 复制为 config.toml，在需要使用的模型 profile 中填写 api_key；实际配置已被 Git 忽略。
-# 玩家字段优先级：命令行 > players 席位字段 > 选中的 profile > 内置默认值。
-# 流式字段优先级：席位 CLI > 全局 CLI > 席位配置 > profile > app > 内置值。
+# Model RPS 配置参考（v0.9.0）
+#
+# 首次使用
+# 1. 程序不会自动创建 config.toml；首次使用真实模型前，复制本文件为 config.toml。
+#    已有 config.toml 时直接编辑，不要再次复制覆盖。
+# 2. 在需要的 profiles 条目中填写服务地址、模型标识与密钥。
+# 3. 在 players.red / players.blue 中选择 profile，保存后重新启动。
+#    模板选中 gpt / deepseek；空密钥不能直接用于真实比赛。
+#
+# 文件与格式
+# - 默认读取当前工作目录的 config.toml；启动参数可指定其他文件或跳过配置，见 README。
+# - 默认文件不存在时使用内置值；指定的文件缺失、已有文件无法读取或格式错误会报错。
+# - 使用 UTF-8 TOML；字符串加引号，布尔值写 true / false，数值不要加引号。
+# - 不要重复添加同名节。修改已有节；未知字段、非法取值在发请求前报错。
+# - 未选中的 profile 也会校验字段，但允许 api_key 为空。
+# - config.toml、config.local.toml、secrets.toml 和 local_secrets.py 已被 Git 忽略。
+#   本文件只放空密钥；其他自定义配置文件或日志路径需要自行加入忽略规则。
+# - 配置仅在启动时读取；大厅换人只改变当前进程，不写回或重新读取文件。
+#
+# 合并优先级（逐字段处理，显式 false 也会覆盖 true）
+# - 玩家普通字段：命令行 > players 席位字段 > 选中的 profile > 内置值。
+# - 流式三个字段：席位命令行 > 全局命令行 > 席位配置 > profile > app > 内置值。
+# - 其他字段：命令行 > TOML > 内置值。
+# - 用启动参数切换 profile 时，原有席位覆盖仍有效。
+# - 连续比赛大厅选择 /red 或 /blue 时，完整替换该席位，并清除旧席位覆盖；
+#   全局参数继续生效，另一席位不变。/swap 则连同覆盖项整体交换。
+#
+# 模板的值不一定等于内置值：模板 BO9 / 120 秒 / 模型 high；
+# 不读配置时为 BO1 / 60 秒 / Red OpenAI、Blue DeepSeek，二者默认 off。
+# 模型实际是否支持指定标识、思考档位或输出长度，由所用服务决定。
+# 程序不会静默换模型、降低思考、缩短输出上限或回退非流式。
 
+# ── 通用运行设置 ──────────────────────────────────────────────
 [app]
-mode = "live"                       # live / demo
-log_dir = "logs"                     # 相对于本配置文件；CLI --log-dir 相对于工作目录
-timeout_seconds = 120               # 仅限制模型请求，不限制人类输入等待
+# live：真实模型；demo：预设模拟玩家，不请求服务。内置 live。
+# demo 中模型席位的 thinking 必须为 off；建议用 README 中跳过配置的演示命令。
+mode = "live"
+
+# 每场 BO 单独建立子目录，连续比赛不覆盖上一场；内置 logs。
+# 相对路径基于本配置文件所在目录；命令行日志路径基于工作目录。
+log_dir = "logs"
+
+# 每次模型请求的总时限，正有限秒数；含连接、思考与正文接收。
+# 即使流式一直有数据也受此限制；不限制人类输入或大厅等待。内置 60。
+timeout_seconds = 120
+
+# 模型请求失败后的重试间隔，非负有限秒数。内置 1；demo 固定为 0。
+# 每次交互最多 3 次尝试，此次数是固定规则，不能在此配置。
 retry_delay_seconds = 1
-max_output_tokens = 20000            # 对局与赛后聊天共用，包含思考生成额度
-stream = false                      # 流式默认值；模型 profile 或席位可分别覆盖
-stream_first_timeout_seconds = 60    # 首个数据事件等待上限，含连接时间
-stream_idle_timeout_seconds = 30     # 后续数据事件间的等待上限；timeout_seconds 仍限制总时长
 
+# 对局、独立聊天和赛后聊天共用的单次输出上限，正整数；内置 20000。
+# 两模型共用此值，不能放到 profile / 席位。它不是上下文窗口大小。
+# 思考可能占用生成额度；不要求模型写满，服务支持的上限可能更低。
+max_output_tokens = 20000
+
+# 流式默认值，内置 false。模型 profile / 席位可覆盖以下三个字段。
+# 双方可混用流式 / 非流式；人类与模拟玩家不发起流式请求。
+# 片段只进入私有日志，完整接收并校验后才执行动作或公开聊天。
+stream = false
+# 首个有效数据事件的等待上限，含连接及响应头；正有限秒数，内置 60。
+stream_first_timeout_seconds = 60
+# 后续有效数据事件之间的等待上限；正有限秒数，内置 30。
+# 注释心跳 / Claude ping 不重置时限；与总时限取最先到达者。
+stream_idle_timeout_seconds = 30
+
+# ── 比赛规则 ──────────────────────────────────────────────────
 [match]
-move_policy = "locked"               # locked / revisable
-best_of = 9                          # 正奇数，BO9 先胜5局
-# max_games = 90                     # 省略时按最终 best_of 的10倍计算，平局也计入
-initiative = "simultaneous"          # alternating 为实验性轮流行动，仅支持 locked
+# locked：首次 MOVE 锁定，双方提交齐全的当前完整 Tick 后结算（内置）。
+# revisable：允许跨 Tick 改拳，提交齐全后的下一 Tick 保留最后一次修改机会。
+move_policy = "locked"
+# 正奇数 N；BO N 先赢 N//2+1 局即结束。内置 1；本模板 9，即先胜 5 局。
+# 平局不增加胜局，弃权正常计分；同一 BO 的各局保留各自上下文。
+best_of = 9
+# 包含平局的实际总局数上限，正整数且不小于目标胜局数。
+# 省略时按最终生效的 BO × 10 计算；到上限仍无冠军则为“未决”。
+# 显式写下后不会随 BO 自动调整。
+# max_games = 90
+# simultaneous：双方结束行动后同步推进（内置）。
+# alternating：实验性轮流行动，仅支持 locked；第一局 Red 先手，逐局交换。
+# 两种模式都允许独立聊天。每方 20 次行动、倒计时和提交可见性为固定规则。
+initiative = "simultaneous"
 
+# ── Red / Blue 席位 ───────────────────────────────────────────
+# profile 引用下方条目，名称区分大小写。两席可引用同一个模型条目，历史仍独立。
+# 也可不引用 profile，直接在席位填写全部模型字段。
+# 无 profile 且未设置 adapter 时，Red 内置 openai、Blue 内置 deepseek。
+#
+# 席位允许 profile 及模型 profile 的全部字段（见下方通用字段说明）。
+# 希望类型随 profile 变化时不要写死 type；模型专属字段建议放入 profile。
 [players.red]
-profile = "gpt"                      # 引用下方 profiles.gpt，也可选择 human
-# name = "GPT-5.6 Sol"               # 显示为 Red · 名称；省略时使用 model
-# thinking = "high"                  # 可在席位上覆盖模型条目的设置
-# analysis = "optional"              # off / optional / required；独立于思考设置
+profile = "gpt"
+# name = "实验玩家"                  # 可选，显示为 Red · 实验玩家
+# thinking = "high"                 # 可为使用同模型的两席分别设档位
+# analysis = "optional"
+# stream = true
 
 [players.blue]
 profile = "deepseek"
 
+# ── 模型 profile 通用字段 ──────────────────────────────────────
+# 条目名称自行定义，如 profiles.gpt 中的 gpt；它不是适配器名或服务模型标识。
+# profile 不允许继承另一个 profile，不在此写 profile 字段或嵌套子表。
+#
+# type：llm / human，省略为 llm。人类条目只允许 type、name、analysis。
+# adapter：模型条目必填，六个取值见示例；选择请求协议和参数，不按 model 猜测。
+# model：服务支持的标识；省略时用适配器内置值。修改它不会自动切换参数方案。
+# base_url：HTTP(S) 基础地址，不含末尾 /chat/completions 或 /messages。
+#   不得带用户名、密码、查询参数或片段；省略时用适配器默认地址。
+#   openai/deepseek/glm/gemini/grok 追加 /chat/completions；
+#   anthropic 对根地址追加 /v1/messages，已有 /v1 时追加 /messages。
+# api_key：该地址对应的密钥；选中的模型必须有效，人类不需要。
+#   只设置 adapter / model 不会自动把旧密钥换成新服务的密钥。
+# thinking：本项目接受的档位见各条目注释；实际支持范围仍以服务为准。
+#   作用于本玩家的对局、独立聊天及赛后聊天。
+# name：可选单行显示名；省略时模型用 model、人类用“玩家”。不能使用保留名 A / B。
+#   model 本身是 A / B 时必须另设 name。昵称相同仍用 Red / Blue 区分。
+# analysis：required / optional / off，独立于 thinking。
+#   required 每次完整行动至少一条非空 ANALYZE；optional 可省略；off 不接受分析。
+#   省略时模型 required、人类 optional；显式填写后不随类型自动变化。
+#   纯聊天与赛后聊天不要求分析；正文分析在整场正常结束后公开。
+#   服务思考仅存私有日志，不能替代 ANALYZE。
+# stream、stream_first_timeout_seconds、stream_idle_timeout_seconds：
+#   逐项覆盖 app，未写的字段继续继承；各阶段请求共用本玩家的设置。
+#   整次请求总时限仍只在 app 设置。
+#
+# 下列地址与标识是示例，不要求使用同一服务。GPT 示例为第三方兼容地址，
+# 其他示例为相应官方地址。换服务时一起核对地址、模型与密钥。
+# 适配器默认地址与 model 与下列示例相同，唯 openai 内置 model 为 gpt-6-luna。
+# 接口映射、官方资料和带日期的测试结果见 MODEL_ADAPTERS.md。
+
 [profiles.gpt]
-# type = "llm"                       # 省略时为 llm；席位不写 type 时继承 profile
+# type = "llm"
 adapter = "openai"
 model = "gpt-5.6-sol"
 base_url = "https://ai.yuhuantin.icu/v1"
-api_key = ""                         # 填写该服务的密钥
-thinking = "high"                    # off / low / medium / high / xhigh / max
+api_key = ""
+thinking = "high"                    # off / low / medium / high / xhigh / max；内置 off
+# name = "GPT"
+# analysis = "required"
 
 [profiles.deepseek]
 adapter = "deepseek"
 model = "deepseek-flash"
 base_url = "https://api.deepseek.com"
 api_key = ""
-thinking = "high"                    # off / low / high / max
+thinking = "high"                    # off / low / high / max；内置 off
 
-# 以下为可选条目；未选择的模型可以暂不填密钥。
-# GLM / Gemini 使用官方 OpenAI 兼容地址；换第三方时同时修改地址、模型与密钥。
+# 以下模型未被默认选中，可暂不填写密钥。新增四种方案内置思考 high，不提供 off。
 [profiles.glm]
 adapter = "glm"
 model = "glm-5.3"
 base_url = "https://api.z.ai/api/paas/v4"
 api_key = ""
 thinking = "high"                    # low / high / max
-stream = true                       # 仅此模型启用流式
+stream = true                       # 仅此 profile 启用；可按服务兼容情况修改
 
 [profiles.gemini]
 adapter = "gemini"
@@ -58,8 +160,8 @@ model = "gemini-4-argon"
 base_url = "https://generativelanguage.googleapis.com/v1beta/openai"
 api_key = ""
 thinking = "high"                    # low / medium / high
-stream_first_timeout_seconds = 90    # 未填写 stream 时继承 app；等待时限可单独设置
-stream_idle_timeout_seconds = 40     # app.timeout_seconds 仍限制整次请求
+stream_first_timeout_seconds = 90    # 未写 stream，仍继承 app 的开关
+stream_idle_timeout_seconds = 40     # 较长等待不保证服务成功；总时限仍有效
 
 [profiles.grok]
 adapter = "grok"
@@ -67,24 +169,34 @@ model = "grok-4.7"
 base_url = "https://api.x.ai/v1"
 api_key = ""
 thinking = "high"                    # low / medium / high / xhigh
-stream = false                      # 可按所用服务的兼容性单独关闭流式
+stream = false                      # 已测第三方服务的流式有兼容问题，见 MODEL_ADAPTERS.md
 
 [profiles.claude]
-adapter = "anthropic"                # 原生 Messages；服务须支持 /v1/messages
+adapter = "anthropic"                # 原生 Messages，服务须支持对应端点及鉴权
 model = "claude-sonnet-5-5"
 base_url = "https://api.anthropic.com/v1"
 api_key = ""
 thinking = "high"                    # low / medium / high / xhigh / max
 
+# ── 人类 profile ──────────────────────────────────────────────
+# 一个终端最多一位人类；把任一席位的 profile 改成 human 即可参与。
+# 人类条目不写 adapter、model、base_url、api_key、thinking 或流式字段。
+# 人类等待输入没有请求超时；思考和流式在运行时均视为关闭。
 [profiles.human]
-type = "human"                      # 一个终端最多一位人类玩家
-name = "玩家"                       # 改为你的用户名
-analysis = "optional"               # off / optional / required
+type = "human"
+name = "玩家"                        # 改成自己的用户名
+analysis = "optional"
 
-# 同模型对战：red / blue 使用同一个 profile；也可用 --red-profile / --blue-profile 临时选择。
-# thinking 可以相同，也可以分别设置；双方始终保持独立历史和日志。
-# 人类玩家：将其中一席 profile 改为 "human"，或使用 --red-profile human / --blue-profile human。
-# 席位显式填写的 type 优先；希望跟随 profile 切换类型时，请省略席位的 type。
-# 人类 profile 只填写 type、name、analysis；不需要模型服务、密钥或流式参数。
-# 原有 [models.名称] 仍兼容模型条目，与 profiles 共享名称，不能同名。
-# analysis 省略时，模型默认 required，人类默认 optional；显式填写的值不会随 type 自动改变。
+# ── 旧配置兼容与密钥来源 ──────────────────────────────────────
+# - [models.名称] 兼容模型条目，字段同模型 profile，但不接受 type；
+#   与 profiles 共享名称，不能定义同名条目。
+# - [players.gpt] / [players.deepseek] 分别映射 Red / Blue；
+#   同一个文件不能混用这套旧名称与 players.red / players.blue。
+# - 推荐在各模型 profile 填密钥。若任一模型席位设置了 api_key，则所有模型席位
+#   都必须有非空密钥；不与旧文件混合取值。人类席位不参与密钥来源判定。
+# - 只有全部模型席位均未设置 api_key，且仅使用 openai / deepseek 时，
+#   才自动回退到工作目录的 local_secrets.py。空字符串不是“未设置”。
+# - 显式指定旧密钥文件的启动参数会覆盖 TOML 密钥，仅支持读取
+#   OPENAI_API_KEY / DEEPSEEK_API_KEY 字符串常量；不执行文件里的 Python 代码。
+# - debug、连续比赛 session、模拟场景 scenario 仅有启动参数，不是 TOML 字段。
+#   完整参数表和运行示例见 README 的“启动参数”章节。
