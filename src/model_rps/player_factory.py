@@ -50,17 +50,18 @@ def player_keys(settings, path):
 
 
 def model_players(client, settings: RuntimeConfig, keys, names):
-    players = []
-    for config, key in zip(settings.seats, keys, strict=True):
-        if config.type == "human":
-            players.append(HumanPlayer(analysis=config.analysis))
-            continue
-        spec = configure_thinking(replace(MODEL_ADAPTERS[config.adapter], model=config.model,
-                                          base_url=config.base_url), config.thinking)
-        streaming = settings.streaming_for(config)
-        players.append(ChatCompletionPlayer(
-            client, spec, key, names=names, max_output_tokens=settings.max_output_tokens,
-            analysis=config.analysis,
-            stream=streaming["stream"], stream_first_timeout=streaming["stream_first_timeout_seconds"],
-            stream_idle_timeout=streaming["stream_idle_timeout_seconds"]))
-    return tuple(players)
+    return tuple(model_player(client, settings, config, key, names)
+                 for config, key in zip(settings.seats, keys, strict=True))
+
+
+def model_player(client, settings, config, key, names):
+    if config.type == "human":
+        return HumanPlayer(analysis=config.analysis)
+    spec = configure_thinking(replace(MODEL_ADAPTERS[config.adapter], model=config.model,
+                                      base_url=config.base_url), config.thinking)
+    streaming = settings.streaming_for(config)
+    return ChatCompletionPlayer(
+        client, spec, key, names=names, max_output_tokens=settings.max_output_tokens,
+        analysis=config.analysis,
+        stream=streaming["stream"], stream_first_timeout=streaming["stream_first_timeout_seconds"],
+        stream_idle_timeout=streaming["stream_idle_timeout_seconds"])

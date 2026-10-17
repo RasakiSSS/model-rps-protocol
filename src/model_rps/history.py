@@ -22,6 +22,14 @@ class ConversationHistory:
     def checkpoint(self):
         return HistoryCheckpoint(len(self.messages), dict(self.cursors), frozenset(self.results))
 
+    def receive_handoff(self, context, user_message):
+        """导入真实交接资料，不伪装为接管模型过去生成的 assistant 消息。"""
+        self.messages.append(user_message)
+        for game in context["games"]:
+            self.cursors[game["game"]] = len(game["events"])
+            self.results.add(game["game"])
+        self.cursors[context["match"].get("game", 1)] = context["state"]["event_cursor"]
+
     def restore(self, checkpoint):
         del self.messages[checkpoint.message_count:]
         self.cursors = dict(checkpoint.cursors)

@@ -13,7 +13,7 @@ import httpx
 from .game import MovePolicy
 from .console import Console, display_text
 from .debug_console import open_debug_window
-from .player_factory import load_keys, model_players, player_keys
+from .player_factory import load_keys, model_player, model_players, player_keys
 from .human import HumanPlayer
 from .human_terminal import HumanTerminal, UserInterrupted, wait_for_resume
 from .config import CONFIG_PATH, RuntimeConfig, load_config, parser_defaults
@@ -26,7 +26,8 @@ from .adapters import MODEL_ADAPTERS
 from .commands import AnalysisPolicy
 from .postmatch import MatchArchive, run_postmatch
 from .runner import RequestPolicy
-from .lobby import choose_next_match
+from .lobby import choose_next_match, select_profile
+from .seats import Replacement, SeatPlayer
 
 
 def make_parser(config: dict | None = None) -> argparse.ArgumentParser:
@@ -124,12 +125,45 @@ async def play_once(args: argparse.Namespace, settings: RuntimeConfig) -> int:
                 for seat, player in zip(("A", "B"), settings.seats)}
     scenario = args.scenario or ("locked" if config.move_policy == MovePolicy.LOCKED else "change")
 
-    async def execute(factory, names, logs):
+    async def execute(factory, names, logs, client=None):
         console = Console(names, logs)
-        players = factory()
+        originals = factory()
+
+        def prepare(identity, profile):
+            prefix, index = ("red", 0) if identity == "A" else ("blue", 1)
+            selected = getattr(args, "_player_profiles", {}).get(profile)
+            if selected is None:
+                raise ValueError("未找到该 profile；请使用配置文件中已有的模型条目名称。")
+            if selected.get("type", "llm") != "llm":
+                raise ValueError("/handoff 只能交给模型 profile。")
+            candidate = select_profile(args, prefix, profile)
+            following = validate_setup(candidate)
+            config = following.seats[index]
+            label = config.display_name if settings.mode == "live" else f"模拟（{config.display_name}）"
+            name = f"{prefix.title()} · {label}"
+            if settings.mode == "demo":
+                player = demo_players(scenario, analysis=tuple(p.analysis for p in following.seats))[index]
+            else:
+                key = player_keys(following, args.secrets_file or Path("local_secrets.py"))[index]
+                logs.add_secrets(key)
+                player = model_player(client, following, config, key, {**names, identity: name})
+            return Replacement(player, name, profile)
+
+        def changed(identity, replacement):
+            names[identity] = replacement.name
+            console.rename_player(identity, replacement.name)
+            logs.names[identity] = replacement.name
+            for seat in players:
+                if hasattr(seat.player, "names"):
+                    seat.player.names.update(names)
+
+        players = tuple(SeatPlayer(player, names[identity],
+                                  prepare_handoff=lambda profile, identity=identity: prepare(identity, profile),
+                                  on_handoff=lambda replacement, identity=identity: changed(identity, replacement))
+                        for identity, player in zip(("A", "B"), originals))
         for identity, player in zip(("A", "B"), players):
             if getattr(player, "interactive", False):
-                terminal = HumanTerminal(player, identity, console)
+                terminal = HumanTerminal(player.player, identity, console)
                 return await terminal.run(execute_match(players, console, names, logs,
                                                         terminal.wait_for_resume))
         return await execute_match(players, console, names, logs)
@@ -179,6 +213,7 @@ async def play_once(args: argparse.Namespace, settings: RuntimeConfig) -> int:
                            completed_ticks=state.completed_ticks, turns={"A": state.turns[0], "B": state.turns[1]})
 
         def request(number, record):
+            record = {"actor": names[record["player"]], **record}
             logs.request(number, record)
             archive.request(number, record)
 
@@ -201,7 +236,8 @@ async def play_once(args: argparse.Namespace, settings: RuntimeConfig) -> int:
             for game in report["games"]:
                 for decision in game["decisions"]:
                     console.game, console.tick = decision["game"], decision["tick"]
-                    label = f"第 {console.game} 局 Tick {console.tick} {console.names[decision['player']]}"
+                    author = display_text(decision.get("actor") or console.names[decision['player']])
+                    label = f"第 {console.game} 局 Tick {console.tick} {author}"
                     actions = json.dumps(decision["actions"], ensure_ascii=False)
                     analysis = decision["summary"] or "本次未提交策略分析。"
                     console.write(f"{label}｜动作：{display_text(actions)}｜分析：{display_text(analysis)}")
@@ -253,9 +289,10 @@ async def play_once(args: argparse.Namespace, settings: RuntimeConfig) -> int:
     names = player_names(settings.red.display_name, settings.blue.display_name)
     async with httpx.AsyncClient(timeout=policy.timeout, follow_redirects=False) as client:
         players = model_players(client, settings, keys, names)
-        secrets = tuple(key for key in (*keys, *(p.api_key for p in settings.seats)) if key)
+        profile_keys = (p.get("api_key") for p in getattr(args, "_player_profiles", {}).values())
+        secrets = tuple(key for key in (*keys, *(p.api_key for p in settings.seats), *profile_keys) if key)
         with RunLogs(settings.log_dir, secrets=secrets, names=names) as logs:
-            return await execute(lambda: players, names, logs)
+            return await execute(lambda: players, names, logs, client)
 
 
 def main(argv: list[str] | None = None) -> int:

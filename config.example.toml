@@ -1,4 +1,4 @@
-# Model RPS 配置参考（v0.9.0）
+# Model RPS 配置参考（v0.10.0）
 #
 # 首次使用
 # 1. 程序不会自动创建 config.toml；首次使用真实模型前，复制本文件为 config.toml。
@@ -15,7 +15,7 @@
 # - 未选中的 profile 也会校验字段，但允许 api_key 为空。
 # - config.toml、config.local.toml、secrets.toml 和 local_secrets.py 已被 Git 忽略。
 #   本文件只放空密钥；其他自定义配置文件或日志路径需要自行加入忽略规则。
-# - 配置仅在启动时读取；大厅换人只改变当前进程，不写回或重新读取文件。
+# - 配置仅在启动时读取；大厅换人和局中交接不写回或重新读取文件。
 #
 # 合并优先级（逐字段处理，显式 false 也会覆盖 true）
 # - 玩家普通字段：命令行 > players 席位字段 > 选中的 profile > 内置值。
@@ -24,6 +24,12 @@
 # - 用启动参数切换 profile 时，原有席位覆盖仍有效。
 # - 连续比赛大厅选择 /red 或 /blue 时，完整替换该席位，并清除旧席位覆盖；
 #   全局参数继续生效，另一席位不变。/swap 则连同覆盖项整体交换。
+# - 局中 /handoff 名称 使用已有 llm profile，兼容旧 [models.名称]。
+#   同样完整替换该席位，清除旧席位的配置及命令行覆盖；全局参数保留，
+#   包括显式的全局 --stream / --no-stream 和流式时限。只影响当前 BO，
+#   不改变下一场大厅默认选择。无需新增配置节，不能交给 human profile。
+#   接管时校验所选模型密钥；无效配置保留人类玩家与草稿。
+#   demo 接管仍使用模拟脚本，所选 profile 的 thinking 必须为 off。
 #
 # 模板的值不一定等于内置值：模板 BO9 / 120 秒 / 模型 high；
 # 不读配置时为 BO1 / 60 秒 / Red OpenAI、Blue DeepSeek，二者默认 off。

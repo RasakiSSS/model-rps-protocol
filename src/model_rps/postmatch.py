@@ -28,7 +28,8 @@ class MatchArchive:
     def finish_game(self, number: int, state: GameState) -> None:
         decisions = [
             {**{key: record[key] for key in ("game", "tick", "player", "attempt", "summary", "actions")},
-             "ignored_actions": record.get("ignored_actions", [])}
+             "ignored_actions": record.get("ignored_actions", []),
+             **({"actor": record["actor"]} if record.get("actor") else {})}
             for record in self._decisions
             if record["game"] == number and record["tick"] <= state.completed_ticks
         ]

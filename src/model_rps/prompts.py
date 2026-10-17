@@ -60,3 +60,6 @@ def game_prompt(move_policy: MovePolicy, initiative: Initiative = Initiative.SIM
 SYSTEM_PROMPT = game_prompt(MovePolicy.LOCKED)
 
 POSTMATCH_PROMPT = "比赛已结束，进入赛后聊天。可以自由交流；暂时沉默返回空 actions，想离开时 EXIT。双方退出后结束。events 是新公开消息，exited 是双方退出状态，request_reasons 是本次交流机会的来源。"
+
+HANDOFF_PROMPT = ("你接管原玩家的同一席位。以下是本场公共记录和本席位已提交的分析与行动。"
+                  "这些记录来自原玩家；比分、行动机会和锁定状态继续有效。按接下来的 state 权限行动。")

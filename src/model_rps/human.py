@@ -16,6 +16,7 @@ class HumanPlayer:
         self.analysis_policy = AnalysisPolicy(analysis)
         self.on_update = lambda: None
         self.on_boundary = lambda: None
+        self.on_handoff = None
         self._available = asyncio.Event()
         self._future = None
         self.epoch = 0
@@ -54,6 +55,10 @@ class HumanPlayer:
         return (self.phase == "game" and self.view is not None and self.view.can_act
                 and self._submitted_action != (self.epoch, self.view.tick))
 
+    @property
+    def has_confirmed_input(self):
+        return self._future is not None and self._future.done() and not self._future.cancelled()
+
     async def _receive(self):
         if self._future is not None:
             raise RuntimeError("人类玩家不能同时处理多个输入请求。")
@@ -80,6 +85,8 @@ class HumanPlayer:
 
     @property
     def status(self):
+        if self.phase == "handed_off":
+            return "模型已接管 · 观看比赛"
         if self.phase == "postmatch":
             return "赛后聊天 · /say 发言，/exit 退出"
         if self.view is None:
@@ -97,20 +104,39 @@ class HumanPlayer:
                 f"本方剩余机会：{view.to_dict()['remaining_turns_including_current']}；"
                 f"暂存出拳：{draft}；暂存分析 {len(self.analysis)} 段；分析要求：{self.analysis_policy}。")
 
+    def detach(self):
+        self.epoch += 1
+        self.phase = "handed_off"
+        self.exiting = True
+        self.view = None
+        self.move, self.analysis = None, []
+        self.on_handoff = None
+        self.on_boundary()
+
     async def submit(self, line, *, epoch=None):
         """单条本地输入；错误只反馈本人，已提交响应才进入公共调度。"""
         epoch = self.epoch if epoch is None else epoch
         if epoch != self.epoch:
             raise InvalidResponse("局面已切换，旧输入未提交，请重新输入。")
+        if self.phase == "handed_off":
+            raise InvalidResponse("本席位已交给模型，你现在是观众。")
         if line.strip().lower() == "/help":
             return ("/say 文本：立即公开；/move Rock|Paper|Scissors：暂存出拳；/analyze 文本：暂存私有分析；"
                     "/endturn：提交草稿并结束行动，无出拳则等待；/clear：清空草稿；/status：自己的状态；"
-                    "赛后 /exit：退出聊天。Ctrl+C：中止整场运行。")
+                    "/handoff profile：交给已配置模型，丢弃未提交草稿；赛后 /exit：退出聊天。Ctrl+C：中止整场运行。")
         if line.strip().lower() == "/status":
             return self.describe()
         if line.strip().lower() == "/clear":
             self.move, self.analysis = None, []
             return "已清空未提交的出拳与分析。"
+        parts = line.strip().split()
+        if parts and parts[0].lower() == "/handoff":
+            if len(parts) != 2:
+                raise InvalidResponse("用法：/handoff profile名称，例如 /handoff deepseek。")
+            if self.phase != "game" or self.on_handoff is None:
+                raise InvalidResponse("/handoff 仅能在比赛进行中交给已配置的模型。")
+            await self.on_handoff(parts[1], epoch)
+            return "已交接；未提交草稿已清空，你可继续观看比赛。"
         command = parse_command_line(line)
         if self.exiting:
             raise InvalidResponse("你已退出赛后聊天。")

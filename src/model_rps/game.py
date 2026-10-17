@@ -85,9 +85,13 @@ class Event:
     kind: str
     player: PlayerId | None = None
     text: str = ""
+    actor: str | None = None
 
     def to_dict(self) -> dict:
-        return {"tick": self.tick, "kind": self.kind, "player": self.player, "text": self.text}
+        result = {"tick": self.tick, "kind": self.kind, "player": self.player, "text": self.text}
+        if self.actor is not None:
+            result["actor"] = self.actor
+        return result
 
 
 class EndReason(StrEnum):

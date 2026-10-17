@@ -18,11 +18,16 @@ def display_text(text: str) -> str:
 class Console:
     def __init__(self, names: dict[str, str], logs: RunLogs | None = None, *, color: bool | None = None) -> None:
         self.names = {key: display_text(value) for key, value in names.items()}
+        self.previous_names = {}
         self.logs = logs
         self.game = 0
         self.tick = 0
         self.color = supports_color() if color is None else color
         self.output = lambda text: print(text, flush=True)
+
+    def rename_player(self, identity, name):
+        self.previous_names[self.names[identity]] = identity
+        self.names[identity] = display_text(name)
 
     def private(self, text: str) -> None:
         """人类自己的草稿、输入反馈与状态，不发送对手或写入 chat.log。"""
@@ -39,11 +44,11 @@ class Console:
             if self.logs is not None:
                 self.logs.lifecycle("tick", game=self.game, tick=self.tick, text=text.strip())
         else:
-            self.output(color_names(text, self.names) if self.color else text)
+            self.output(color_names(text, self.names, aliases=self.previous_names) if self.color else text)
 
     def event(self, event: Event) -> None:
         self.tick = event.tick
-        name = self.names.get(event.player, "System")
+        name = display_text(event.actor) if event.actor else self.names.get(event.player, "System")
         if event.kind == "tick":
             if event.text == "settlement":
                 self.write(f"\n── 结算 Tick {event.tick}（最后一次行动机会）──", debug_only=True)
@@ -65,8 +70,8 @@ class Console:
         # reveal 仍在裁判事件与赛后公开数据中；终端和 chat.log 由 result 统一展示。
         elif event.kind in ("retry", "error", "chat_error"):
             self.write(f"System：{name}，{display_text(event.text)}")
-        elif event.kind in ("reminder", "settlement_pending"):
-            self.write(f"System：{event.text}")
+        elif event.kind in ("reminder", "settlement_pending", "handoff"):
+            self.write(f"System：{display_text(event.text)}")
 
     def result(self, state: GameState) -> None:
         result = state.result
