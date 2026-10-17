@@ -19,7 +19,7 @@ from model_rps.cli import main
 from model_rps.console import Console
 from model_rps.game import GameState
 from model_rps.human import HumanPlayer
-from model_rps.human_terminal import HumanTerminal, UserInterrupted
+from model_rps.human_terminal import HumanTerminal, UserInterrupted, wait_for_resume
 from model_rps.identities import player_names
 from model_rps.logs import RunLogs
 from test_human import until
@@ -30,6 +30,9 @@ class AutoTerminal:
 
     def __init__(self, player, identity, console):
         self.player = player
+
+    async def wait_for_resume(self):
+        raise AssertionError('此输入脚本应让双方直接退出，不应进入待机')
 
     async def run(self, match):
         game = asyncio.create_task(match)
@@ -68,6 +71,47 @@ class AutoTerminal:
 
 
 class HumanCliTests(unittest.TestCase):
+    def test_model_only_cli_idle_resume_preserves_score_and_records_silence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = root / 'config.toml'
+            config.write_text('[app]\nretry_delay_seconds=0\n'
+                              '[players.red]\napi_key="red-test"\n'
+                              '[players.blue]\napi_key="blue-test"', encoding='utf-8')
+            counts = {'Red': 0, 'Blue': 0}
+
+            def handler(request):
+                body = json.loads(request.content)
+                context = json.loads(body['messages'][-1]['content'])
+                if context['phase'] == 'postmatch':
+                    seat = context['player'].split(' · ')[0]
+                    counts[seat] += 1
+                    resumed = counts[seat] == 2
+                    self.assertEqual(context['request_reasons'], ['operator_resume'] if resumed else ['postmatch_start'])
+                    payload = postmatch_payload(exit=resumed)
+                else:
+                    seat = context['state']['player'].split(' · ')[0]
+                    payload = {'actions': []} if context['phase'] == 'chat' else turn_payload(
+                        [{'type': 'MOVE', 'move': 'Paper' if seat == 'Red' else 'Rock'}])
+                return httpx.Response(200, json={'choices': [{'finish_reason': 'stop', 'message': {
+                    'content': json.dumps(payload)}}]})
+
+            client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+            resume = AsyncMock()
+            with patch('model_rps.cli.httpx.AsyncClient', return_value=client), \
+                    patch('model_rps.cli.wait_for_resume', resume), contextlib.redirect_stdout(io.StringIO()) as out:
+                self.assertEqual(main(['--config', str(config), '--log-dir', str(root / 'logs')]), 0)
+            resume.assert_awaited_once()
+            self.assertEqual(counts, {'Red': 2, 'Blue': 2})
+            self.assertIn('赢得 BO1', out.getvalue())
+            self.assertIn('双方已退出', out.getvalue())
+            run, = (root / 'logs').iterdir()
+            for seat in ('red', 'blue'):
+                rows = [json.loads(line) for line in (run / seat / 'debug.log').read_text(encoding='utf-8').splitlines()]
+                self.assertEqual(len([r for r in rows if r['kind'] == 'postmatch_idle']), 1)
+                self.assertEqual(len([r for r in rows if r['kind'] == 'postmatch_resumed']), 1)
+                self.assertIn('暂时沉默，仍留在赛后聊天中', (run / seat / 'thought.log').read_text(encoding='utf-8'))
+
     def test_live_bo_human_either_seat_public_privacy_and_only_one_model_request_stream(self):
         for seat in ('red', 'blue'):
             for mode, policy in (('simultaneous', 'locked'), ('simultaneous', 'revisable'), ('alternating', 'locked')):
@@ -217,6 +261,81 @@ class TerminalTests(unittest.IsolatedAsyncioTestCase):
             session.default_buffer.text = '/say 还没发出的聊天'
             player.start_game({'game': 3})
             self.assertEqual(session.default_buffer.text, '/say 还没发出的聊天')
+
+
+class IdleTerminalTests(unittest.IsolatedAsyncioTestCase):
+    async def test_model_only_resume_prompt_accepts_only_resume(self):
+        with create_pipe_input() as pipe:
+            lines = []
+            console = Console(player_names('red', 'blue'))
+            console.output = lines.append
+            session = PromptSession(input=pipe, output=DummyOutput())
+            task = asyncio.create_task(wait_for_resume(console, session))
+            try:
+                await until(lambda: session.app.is_running)
+                pipe.send_text('/exit\r')
+                await until(lambda: any('此处不能' in line for line in lines))
+                self.assertFalse(task.done())
+                await until(lambda: session.app.is_running)
+                pipe.send_text('/resume\r')
+                await asyncio.wait_for(task, 2)
+                self.assertTrue(any('已邀请' in line for line in lines))
+                self.assertFalse(any('已退出' in line for line in lines))
+            finally:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+
+    async def test_after_human_exit_same_terminal_switches_to_resume_without_overlapping_prompts(self):
+        from model_rps.postmatch import run_postmatch
+        from test_postmatch import ChatParticipant, FAST, REPORT, VALID
+
+        with create_pipe_input() as pipe:
+            human = HumanPlayer()
+            peer = ChatParticipant(['{"actions":[]}', '{"actions":[]}', VALID])
+            session = PromptSession(input=pipe, output=DummyOutput())
+            lines = []
+            console = Console(player_names('human', 'model'))
+            console.output = lines.append
+            terminal = HumanTerminal(human, 'A', console, session=session)
+            task = asyncio.create_task(terminal.run(run_postmatch((human, peer), REPORT, policy=FAST,
+                on_idle=lambda exited: terminal.wait_for_resume())))
+            try:
+                await until(lambda: session.app.is_running and human._available.is_set() and len(peer.requests) == 1)
+                pipe.send_text('/exit\r')
+                await until(lambda: session.app.is_running and session.message == '赛后控制 > ')
+                self.assertTrue(human.exiting)
+                self.assertEqual(len(peer.requests), 2)
+                pipe.send_text('/resume\r')
+                self.assertTrue((await asyncio.wait_for(task, 2)).complete)
+                self.assertEqual(peer.requests[-1][0]['request_reasons'], ['operator_resume'])
+                self.assertFalse(session.app.is_running)
+                self.assertEqual(console.output, lines.append)
+            finally:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+
+    async def test_idle_eof_ctrl_c_and_noninteractive_wait_are_cancellable(self):
+        console = Console(player_names('red', 'blue'))
+        console.output = lambda text: None
+        for error in (EOFError(), KeyboardInterrupt()):
+            with self.subTest(error=type(error).__name__), create_pipe_input() as pipe:
+                session = PromptSession(input=pipe, output=DummyOutput())
+                session.prompt_async = AsyncMock(side_effect=error)
+                with self.assertRaises(UserInterrupted):
+                    await wait_for_resume(console, session)
+        with patch('model_rps.human_terminal.sys.stdin.isatty', return_value=False), \
+                patch('model_rps.human_terminal.PromptSession') as prompt:
+            task = asyncio.create_task(wait_for_resume(console))
+            try:
+                await asyncio.sleep(.02)
+                self.assertFalse(task.done())
+                prompt.assert_not_called()
+                task.cancel()
+                with self.assertRaises(asyncio.CancelledError):
+                    await task
+            finally:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
 
 
 if __name__ == '__main__':

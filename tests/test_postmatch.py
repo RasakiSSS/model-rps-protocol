@@ -44,6 +44,9 @@ class PostmatchTests(unittest.TestCase):
         self.assertTrue(parse_postmatch(VALID).exit)
         self.assertFalse(parse_postmatch(json.dumps(postmatch_payload('继续聊', exit=False))).exit)
         self.assertTrue(parse_postmatch(json.dumps(postmatch_payload())).exit)
+        silent = parse_postmatch('{"actions":[]}')
+        self.assertTrue(silent.silent)
+        self.assertFalse(silent.exit)
         invalid = ["", "```json\n" + VALID + "\n```", "[]",
                    '{"actions":[{"type":"WAIT"}]}',
                    '{"assessment":"a","key_moments":"b","improvements":"c","actions":[]}',
@@ -52,8 +55,7 @@ class PostmatchTests(unittest.TestCase):
                    '{"actions":[{"type":"EXIT"},{"type":"SAY","text":"late"}]}',
                    '{"actions":[{"type":"EXIT"},{"type":"EXIT"}]}',
                    '{"actions":[{"type":"EXIT","text":"extra"}]}',
-                   '{"actions":[{"type":"REVIEW","text":"obsolete"}]}',
-                   '{"actions":[]}']
+                   '{"actions":[{"type":"REVIEW","text":"obsolete"}]}']
         for value in (None, "", " ", 1, []):
             invalid.append(json.dumps({'actions': [{'type': 'SAY', 'text': value}]}))
         for raw in invalid:
@@ -164,6 +166,101 @@ class PostmatchTests(unittest.TestCase):
 
 
 class AsyncPostmatchTests(unittest.IsolatedAsyncioTestCase):
+    async def test_both_silent_wait_without_polling_until_operator_resumes(self):
+        silent = json.dumps(postmatch_payload(exit=False))
+        players = tuple(ChatParticipant([silent, VALID]) for _ in range(2))
+        events, records, idle_states = [], [], []
+        idle_started, resume = asyncio.Event(), asyncio.Event()
+
+        async def idle(exited):
+            idle_states.append(exited)
+            idle_started.set()
+            await resume.wait()
+
+        task = asyncio.create_task(run_postmatch(players, REPORT, policy=FAST, on_idle=idle,
+            on_event=events.append, on_request=records.append))
+        try:
+            await asyncio.wait_for(idle_started.wait(), 1)
+            await asyncio.sleep(.03)
+            self.assertFalse(task.done())
+            self.assertEqual([len(p.requests) for p in players], [1, 1])
+            self.assertEqual(events, [])
+            self.assertEqual(idle_states, [{'A': False, 'B': False}])
+            resume.set()
+            outcome = await asyncio.wait_for(task, 1)
+            self.assertTrue(outcome.complete)
+            for player in players:
+                self.assertEqual(player.requests[1][0]['request_reasons'], ['operator_resume'])
+                self.assertNotIn('match', player.requests[1][0])
+            self.assertEqual(len([r for r in records if r['kind'] == 'postmatch_applied' and r['silent']]), 2)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    async def test_exited_peer_not_polled_and_silence_after_exit_idles(self):
+        silent = json.dumps(postmatch_payload(exit=False))
+        # 同时首次沉默的玩家还能收到对手新产生的 EXIT；读完 EXIT 后不重复唤醒。
+        a, b = ChatParticipant([silent, silent, VALID]), ChatParticipant([VALID])
+        states = []
+
+        async def idle(exited):
+            states.append(exited)
+            self.assertEqual((len(a.requests), len(b.requests)), (2, 1))
+            await asyncio.sleep(.03)
+            self.assertEqual((len(a.requests), len(b.requests)), (2, 1))
+
+        outcome = await asyncio.wait_for(run_postmatch((a, b), REPORT, policy=FAST, on_idle=idle), 1)
+        self.assertTrue(outcome.complete)
+        self.assertEqual(states, [{'A': False, 'B': True}])
+        self.assertEqual(a.requests[-1][0]['request_reasons'], ['operator_resume'])
+        self.assertEqual(len(b.requests), 1)
+
+    async def test_human_new_say_wakes_silent_model_without_operator_command(self):
+        from model_rps.human import HumanPlayer
+        from test_human import until
+
+        human = HumanPlayer()
+        model = ChatParticipant([json.dumps(postmatch_payload(exit=False)), VALID])
+        events = []
+        task = asyncio.create_task(run_postmatch((human, model), REPORT, policy=FAST, on_event=events.append))
+        try:
+            await until(lambda: human._available.is_set() and len(model.requests) == 1)
+            await human.submit('/say 再聊一句')
+            await until(lambda: any(e['kind'] == 'exit' and e['player'] == 'B' for e in events))
+            self.assertEqual(model.requests[1][0]['request_reasons'], ['opponent_event'])
+            self.assertEqual(model.requests[1][0]['events'][0]['text'], '再聊一句')
+            await human.submit('/exit')
+            self.assertTrue((await asyncio.wait_for(task, 1)).complete)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    async def test_idle_without_resume_handler_is_cancellable_and_does_not_exit(self):
+        players = tuple(ChatParticipant(['{"actions":[]}']) for _ in range(2))
+        events, applied = [], asyncio.Event()
+        count = 0
+
+        def record(row):
+            nonlocal count
+            if row['kind'] == 'postmatch_applied':
+                count += 1
+                if count == 2:
+                    applied.set()
+
+        task = asyncio.create_task(run_postmatch(players, REPORT, policy=FAST, on_event=events.append, on_request=record))
+        try:
+            await asyncio.wait_for(applied.wait(), 1)
+            await asyncio.sleep(.03)
+            self.assertFalse(task.done())
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+            self.assertEqual(events, [])
+            self.assertEqual([len(p.requests) for p in players], [1, 1])
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
     async def test_both_speak_repeatedly_see_peer_and_exit_without_repeating_report(self):
         def messages(name):
             return [json.dumps(postmatch_payload(f'{name}-{i}', exit=i == 4)) for i in range(5)]

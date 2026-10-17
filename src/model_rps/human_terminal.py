@@ -1,6 +1,7 @@
 """可取消的异步终端输入；玩家提示只在本地显示，不写入公共聊天。"""
 
 import asyncio
+import sys
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.application import create_app_session, run_in_terminal
@@ -12,6 +13,25 @@ from .game import InvalidResponse
 
 class UserInterrupted(Exception):
     """Ctrl+C 或关闭输入；由 CLI 统一按用户中止处理。"""
+
+
+async def wait_for_resume(console, session=None):
+    """双方均无请求时由终端操作者恢复交流，不代替玩家发言或 EXIT。"""
+    console.write("System：赛后暂无新消息，进入待机；仍在场的玩家尚未退出。")
+    if session is None and not (sys.stdin.isatty() and sys.stdout.isatty()):
+        console.output("当前无交互终端，保持待机；可中止进程，已有日志保留。")
+        await asyncio.Event().wait()
+    session = session or PromptSession(output=create_output(), erase_when_done=True)
+    while True:
+        try:
+            line = await session.prompt_async("赛后控制 > ", key_bindings=KeyBindings(),
+                bottom_toolbar="/resume 邀请仍在场的玩家继续交流 · Ctrl+C 中止")
+        except (EOFError, KeyboardInterrupt):
+            raise UserInterrupted from None
+        if line.strip().lower() == "/resume":
+            console.write("System：已邀请仍在场的玩家继续交流。")
+            return
+        console.private("输入 /resume 恢复交流；Ctrl+C 中止。此处不能代替玩家发言或退出。")
 
 
 class HumanTerminal:
@@ -61,6 +81,9 @@ class HumanTerminal:
             if message:
                 self.console.private(message)
 
+    async def wait_for_resume(self):
+        await wait_for_resume(self.console, self.session)
+
     async def run(self, match):
         self.player.on_update = self._update
         self.player.on_boundary = self._boundary
@@ -74,13 +97,13 @@ class HumanTerminal:
             while (line := await lines.get()) is not None:
                 await run_in_terminal(lambda: original_output(line))
 
-        game = asyncio.create_task(match)
-        tasks = [game]
+        tasks = []
         try:
             with create_app_session(input=self.session.app.input, output=self.session.app.output):
+                game = asyncio.create_task(match)
                 reader = asyncio.create_task(self._read())
                 printer = asyncio.create_task(display())
-                tasks.extend((reader, printer))
+                tasks.extend((game, reader, printer))
                 try:
                     self.console.private("使用 /help 查看指令；输入期间仍可收到对手发言。")
                     done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)

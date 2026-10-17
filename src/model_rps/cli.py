@@ -15,7 +15,7 @@ from .console import Console, display_text
 from .debug_console import open_debug_window
 from .player_factory import load_keys, model_players, player_keys
 from .human import HumanPlayer
-from .human_terminal import HumanTerminal, UserInterrupted
+from .human_terminal import HumanTerminal, UserInterrupted, wait_for_resume
 from .config import CONFIG_PATH, RuntimeConfig, load_config, parser_defaults
 from .diagnostics import LogError
 from .logs import RunLogs
@@ -94,10 +94,11 @@ async def play(args: argparse.Namespace) -> int:
         for identity, player in zip(("A", "B"), players):
             if getattr(player, "interactive", False):
                 terminal = HumanTerminal(player, identity, console)
-                return await terminal.run(execute_match(players, console, names, logs))
+                return await terminal.run(execute_match(players, console, names, logs,
+                                                        terminal.wait_for_resume))
         return await execute_match(players, console, names, logs)
 
-    async def execute_match(players, console, names, logs):
+    async def execute_match(players, console, names, logs, resume_prompt=None):
         if args.debug:
             open_debug_window(logs)
         archive = MatchArchive()
@@ -181,8 +182,14 @@ async def play(args: argparse.Namespace) -> int:
                     for line in lines[1:]:
                         console.write(f"  {display_text(line)}")
 
+            async def idle(exited):
+                logs.lifecycle("postmatch_idle", exited=exited)
+                await (resume_prompt() if resume_prompt else wait_for_resume(console))
+                logs.lifecycle("postmatch_resumed", exited=exited)
+
             outcome = await run_postmatch(players, report, policy=policy,
-                                         on_request=lambda record: request(0, record), on_event=postmatch_event)
+                                         on_request=lambda record: request(0, record), on_event=postmatch_event,
+                                         on_idle=idle)
             logs.lifecycle("postmatch_end", complete=outcome.complete, exited=outcome.exited,
                            failed_player=outcome.failed_player, error=outcome.error)
             if not outcome.complete:

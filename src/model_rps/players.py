@@ -15,6 +15,7 @@ import httpx
 from .game import MAX_TICKS, PlayerView
 from .commands import AnalysisPolicy
 from .context_usage import ContextUsage
+from .history import ConversationHistory, HistoryCheckpoint
 from .diagnostics import trace
 from .identities import named_data
 from .prompts import POSTMATCH_PROMPT, game_prompt
@@ -150,16 +151,17 @@ class ChatCompletionPlayer:
         self.start_match()
 
     def start_match(self) -> None:
-        self._messages = [{"role": "system", "content": game_prompt("locked", analysis=self.analysis_policy)}]
+        self._history = ConversationHistory(game_prompt("locked", analysis=self.analysis_policy))
+        self._messages = self._history.messages
         self._match_context = None
         self._context_usage = ContextUsage()
         self._usage = None
 
-    def checkpoint_history(self) -> int:
-        return len(self._messages)
+    def checkpoint_history(self) -> HistoryCheckpoint:
+        return self._history.checkpoint()
 
-    def restore_history(self, checkpoint: int) -> None:
-        del self._messages[checkpoint:]
+    def restore_history(self, checkpoint: HistoryCheckpoint) -> None:
+        self._history.restore(checkpoint)
 
     def start_game(self, context: dict) -> None:
         # 每个玩家持有独立副本，不能通过共享可变字典影响对手视图。
@@ -167,23 +169,22 @@ class ChatCompletionPlayer:
 
     async def respond(self, view: PlayerView, feedback: str | None = None) -> ModelResponse:
         self._messages[0] = {"role": "system", "content": game_prompt(view.move_policy, view.initiative, self.analysis_policy)}
-        context = {"phase": "game" if view.can_act else "chat", "state": view.to_dict(), "correction": feedback}
-        if self._match_context is not None:
-            context["match"] = self._match_context
+        context = self._history.game_context(view, self._match_context, feedback)
         user_message = {"role": "user", "content": json.dumps(named_data(context, self.names), ensure_ascii=False)}
         response = await self._complete([*self._messages, user_message])
         # 只保留该玩家自己的响应；格式校验失败后的纠错也属于其私有上下文。
         # 网络失败没有完整响应，不追加未配对的用户消息。
-        self._messages.extend([user_message, {"role": "assistant", "content": response.content}])
+        self._history.remember(context, user_message, response.content)
         return response
 
     async def postmatch(self, context: dict, feedback: str | None = None) -> str:
-        # 首次邀请含双方相同的公开记录，后续只追加新聊天事件。
+        # 公开材料相同；已经提供过的事件从保留历史中读取，首次公开的分析完整提供。
+        context = self._history.postmatch_context(context, feedback)
         user_message = {"role": "user", "content": json.dumps(named_data(
             {**context, "phase": "postmatch", "request": POSTMATCH_PROMPT, "correction": feedback},
             self.names), ensure_ascii=False)}
         response = await self._complete([*self._messages, user_message])
-        self._messages.extend([user_message, {"role": "assistant", "content": response.content}])
+        self._history.remember(context, user_message, response.content)
         return response.content
 
     async def _complete(self, messages: list[dict]) -> ModelResponse:

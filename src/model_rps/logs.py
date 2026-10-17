@@ -140,6 +140,8 @@ class RunLogs:
                 lines.append(paragraph("拟发送发言：", message))
             if record["exit"]:
                 lines.append("拟执行：EXIT · 退出赛后聊天。")
+            elif record.get("silent"):
+                lines.append("拟执行：暂时沉默，仍留在赛后聊天中。")
         else:
             status = "已取消" if record.get("status") == "cancelled" else "请求失败或响应无效"
             subject = {'postmatch': '赛后响应', 'chat': '聊天响应'}.get(record.get('phase'), '行动或聊天响应')

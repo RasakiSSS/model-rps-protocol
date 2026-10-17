@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 import httpx
 
-from fixtures import turn_payload, postmatch_payload
+from fixtures import complete_public_report, turn_payload, postmatch_payload
 from model_rps.cli import main, make_parser
 from model_rps.commands import (AnalysisPolicy, CommandKind, parse_commands, parse_command_line,
                                 parse_decision, validate_decision, parse_postmatch)
@@ -141,8 +141,8 @@ class CommandTests(unittest.TestCase):
                     self.assertEqual(main(['--config', str(path), '--log-dir', str(root / 'logs')]), 0)
                 self.assertEqual(calls['Red'], calls['Blue'] + 1)
                 self.assertEqual(set(postmatchs), {'Red', 'Blue'})
-                self.assertEqual(json.loads(postmatchs['Red']['messages'][-1]['content'])['match'],
-                                 json.loads(postmatchs['Blue']['messages'][-1]['content'])['match'])
+                self.assertEqual(complete_public_report(postmatchs['Red']['messages']),
+                                 complete_public_report(postmatchs['Blue']['messages']))
                 self.assertIn('REJECTED-ANALYSIS', json.dumps(postmatchs['Red']))
                 self.assertNotIn('REJECTED-ANALYSIS', json.dumps(postmatchs['Blue']))
                 self.assertNotIn('NATIVE-PRIVATE', json.dumps(postmatchs))

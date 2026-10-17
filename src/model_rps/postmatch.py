@@ -1,6 +1,7 @@
 """赛后公开记录与持续聊天；双方 EXIT 后结束，不修改比赛结果。"""
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from copy import deepcopy
 from dataclasses import dataclass
 from time import perf_counter
@@ -85,7 +86,7 @@ async def _request(player: MatchPlayer, context: dict, policy: RequestPolicy,
                     raw = await player.postmatch(deepcopy(context), feedback)
                 trace("raw_response", content=raw)
                 response = parse_postmatch(raw)
-                trace("postmatch_response", messages=response.messages, exit=response.exit)
+                trace("postmatch_response", messages=response.messages, exit=response.exit, silent=response.silent)
                 trace("request_end", status="valid", elapsed_seconds=perf_counter() - started)
                 return response
             except LogError:
@@ -95,7 +96,7 @@ async def _request(player: MatchPlayer, context: dict, policy: RequestPolicy,
                 raise
             except InvalidResponse as exc:
                 summary = "赛后聊天格式无效"
-                feedback = f"{exc} 请返回完整 JSON，使用 SAY 发言或 EXIT 退出。"
+                feedback = f"{exc} 请返回完整 JSON，使用 SAY 发言、空 actions 暂时沉默或 EXIT 退出。"
             except TimeoutError:
                 summary = "赛后聊天请求超时"
                 feedback = "上一请求超时，请根据同一份聊天状态返回完整 JSON。"
@@ -125,12 +126,15 @@ class PendingChat:
 
 async def run_postmatch(players: tuple[MatchPlayer, MatchPlayer], report: dict, *,
                         policy: RequestPolicy, on_request: TraceHandler | None = None,
-                        on_event: TraceHandler | None = None) -> PostmatchOutcome:
-    """首次邀请双方，之后由对手新消息/退出触发；忙碌时合并通知。"""
+                        on_event: TraceHandler | None = None,
+                        on_idle: Callable[[dict[str, bool]], Awaitable[None]] | None = None) -> PostmatchOutcome:
+    """首次邀请双方，之后合并事件通知；无人响应时等待 on_idle 恢复或外部取消。"""
     seats = dict(zip(("A", "B"), players))
     exited = dict.fromkeys(seats, False)
     cursors = dict.fromkeys(seats, 0)
     invited = set()
+    last_spoke = dict.fromkeys(seats, False)
+    resumed = set()
     events = []
     pending: dict[str, PendingChat] = {}
     serial = 0
@@ -159,12 +163,22 @@ async def run_postmatch(players: tuple[MatchPlayer, MatchPlayer], report: dict, 
                     continue
                 updates = events[cursors[identity]:]
                 peer_exited = exited["B" if identity == "A" else "A"]
-                if (not getattr(player, "interactive", False) and identity in invited and not peer_exited
-                        and not any(e["player"] != identity for e in updates)):
+                reasons = []
+                if identity not in invited:
+                    reasons.append("postmatch_start")
+                if any(e["player"] != identity for e in updates):
+                    reasons.append("opponent_event")
+                if identity in resumed:
+                    reasons.append("operator_resume")
+                if peer_exited and last_spoke[identity]:
+                    reasons.append("continue_after_exit")
+                if not getattr(player, "interactive", False) and not reasons:
                     continue
+                resumed.discard(identity)
+                last_spoke[identity] = False
                 serial += 1
                 context = {"player": identity, "request_id": serial, "events": deepcopy(updates),
-                           "event_cursor": len(events), "exited": dict(exited)}
+                           "event_cursor": len(events), "exited": dict(exited), "request_reasons": reasons}
                 if identity not in invited:
                     context["match"] = deepcopy(report)
                 invited.add(identity)
@@ -172,9 +186,14 @@ async def run_postmatch(players: tuple[MatchPlayer, MatchPlayer], report: dict, 
                 checkpoint = getattr(player, "checkpoint_history", lambda: None)()
                 pending[identity] = PendingChat(serial, asyncio.create_task(
                     _request(player, context, policy, on_request)), checkpoint)
-            # 非空 SAY 会唤醒对手；最后一位玩家始终可继续发言或 EXIT。
+            # 沉默不等于退出；没有新事件时待机，不使用重复请求维持活跃。
             if not pending:
-                raise AssertionError("赛后聊天没有可运行的请求。")
+                if on_idle is None:
+                    await asyncio.Event().wait()  # 无外部唤醒入口时仍允许调用方取消。
+                else:
+                    await on_idle(dict(exited))
+                resumed.update(identity for identity in seats if not exited[identity])
+                continue
             done, _ = await asyncio.wait([p.task for p in pending.values()], return_when=asyncio.FIRST_COMPLETED)
             failure = None
             for identity, item in sorted(list(pending.items()), key=lambda pair: pair[1].request_id):
@@ -194,8 +213,9 @@ async def run_postmatch(players: tuple[MatchPlayer, MatchPlayer], report: dict, 
                 if response.exit:
                     exited[identity] = True
                     publish(identity, "exit")
+                last_spoke[identity] = bool(response.messages)
                 record(identity, item.request_id, "postmatch_applied", exit=response.exit,
-                       event_sequences=list(range(before + 1, len(events) + 1)))
+                       silent=response.silent, event_sequences=list(range(before + 1, len(events) + 1)))
                 pending.pop(identity)
             if failure is not None:
                 return PostmatchOutcome(dict(exited), failure.failed_player, failure.error)

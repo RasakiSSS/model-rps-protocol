@@ -96,7 +96,7 @@ def parse_commands(raw: str, *, allow_empty: bool = False) -> tuple[Command, ...
 
 
 def parse_command_line(line: str) -> Command:
-    """仅解析单条 /指令，尚不提供交互终端或自动结束行动。"""
+    """仅解析单条 /指令，不负责终端输入或自动结束行动。"""
     parts = line.strip().split(maxsplit=1) if isinstance(line, str) else []
     if not parts or not parts[0].startswith("/"):
         raise InvalidResponse("请输入 /say、/analyze、/move、/endturn 或 /exit。")
@@ -176,9 +176,13 @@ class PostmatchResponse:
     messages: tuple[str, ...]
     exit: bool = False
 
+    @property
+    def silent(self) -> bool:
+        return not self.messages and not self.exit
+
 
 def parse_postmatch(raw: str) -> PostmatchResponse:
-    commands = parse_commands(raw)
+    commands = parse_commands(raw, allow_empty=True)
     if any(c.kind not in (CommandKind.SAY, CommandKind.EXIT) for c in commands):
         raise InvalidResponse("赛后只能 SAY 发言或 EXIT 退出，不接受游戏动作。")
     exits = [i for i, command in enumerate(commands) if command.kind == CommandKind.EXIT]

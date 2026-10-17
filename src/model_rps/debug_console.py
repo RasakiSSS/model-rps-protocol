@@ -83,9 +83,11 @@ def format_record(row: dict) -> str | None:
         detail = row["text"]
     elif kind == "request_start":
         detail = "等待响应"
-        reasons = row.get("state", {}).get("request_reasons", [])
+        reasons = row.get("state", row.get("context", {})).get("request_reasons", [])
         labels = {"game_start": "开局", "turn_changed": "行动轮换", "tick_started": "新 Tick",
-                  "action_available": "行动机会", "action_ended": "自己的行动已结束", "opponent_say": "对手发言"}
+                  "action_available": "行动机会", "action_ended": "自己的行动已结束", "opponent_say": "对手发言",
+                  "postmatch_start": "赛后邀请", "opponent_event": "对手发言或退出",
+                  "operator_resume": "终端恢复交流", "continue_after_exit": "对手离开后继续发言"}
         if reasons:
             detail += "；触发：" + "、".join(labels.get(reason, reason) for reason in reasons)
         if row.get("correction"):
@@ -119,7 +121,7 @@ def format_record(row: dict) -> str | None:
             detail = f"已应用：公开 {len(row.get('event_sequences', []))} 条发言"
         detail += f"；应用于 Tick {row.get('applied_tick')}"
     elif kind == "postmatch_applied":
-        detail = f"已公开 {len(row.get('event_sequences', []))} 条赛后事件"
+        detail = "保持沉默，仍在场" if row.get("silent") else f"已公开 {len(row.get('event_sequences', []))} 条赛后事件"
         if row.get("exit"):
             detail += "；玩家退出"
     elif kind == "request_discarded":

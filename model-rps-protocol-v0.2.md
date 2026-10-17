@@ -1,6 +1,6 @@
 # Model RPS — 项目协议 v0.2
 
-当前程序版本：v0.6.0。支持人类 CLI 玩家、独立聊天、消息收件箱与上下文用量记录，以及 Red / Blue 通用席位、同模型对战、独立调试窗口、同时与轮流行动、锁定与改拳模式、BO 比赛、同场上下文保留、赛后聊天、思考设置、TOML 配置及可选流式响应。
+当前程序版本：v0.7.0。支持上下文增量传递、赛后沉默与待机恢复、人类 CLI 玩家、独立聊天、消息收件箱与上下文用量记录，以及 Red / Blue 通用席位、同模型对战、独立调试窗口、同时与轮流行动、锁定与改拳模式、BO 比赛、同场上下文保留、赛后聊天、思考设置、TOML 配置及可选流式响应。
 
 最后更新：2026-10-17。
 
@@ -201,6 +201,7 @@ model-rps-protocol/
 │     ├─ postmatch.py           赛后记录与沿用上下文的赛后聊天
 │     ├─ diagnostics.py         并发请求的诊断事件
 │     ├─ context_usage.py       单次输入、增长与本场累计用量
+│     ├─ history.py             增量公开事件、历史检查点与回退
 │     ├─ logs.py                日志保存、脱敏与资源管理
 │     ├─ identities.py          红蓝显示身份与固定席位目录
 │     ├─ player_factory.py      模型配置到独立玩家实例
@@ -208,6 +209,8 @@ model-rps-protocol/
 │     ├─ debug_console.py       独立只读调试窗口
 │     ├─ config.py              TOML 读取、合并与严格校验
 │     ├─ players.py             模型接入与响应处理
+│     ├─ human.py               人类玩家、私有草稿与输入确认
+│     ├─ human_terminal.py       异步终端、待机恢复与取消清理
 │     ├─ streaming.py           SSE 解析与完整响应组装
 │     ├─ prompts.py             统一维护对局与赛后聊天提示词
 │     └─ cli.py                 命令行入口与比赛组装
@@ -259,6 +262,7 @@ model-rps-protocol/
 | `request_id` | 本局内从 1 递增的交互编号，双方共用序列；重试保持不变 |
 | `request_reasons` | 合并后的请求触发原因，详见下表；权限始终以 can_act 为准 |
 | `event_cursor` | 本次快照中最后一条公开事件的序号；没有事件时为 0 |
+| `history_after` | 本席位此前已提供并保留的本局事件边界；只存在于模型增量请求中 |
 | `notifications` | 自上次请求后合并通知的对手 SAY 序号；生成期间的新消息下次再提供 |
 | `move_policy` | 本场模式 locked 或 revisable |
 | `own_move_locked` | locked 模式已提交时为 true，其余为 false |
@@ -275,9 +279,11 @@ model-rps-protocol/
 | `remaining_ticks_including_current` | 包含当前 Tick、到当前已知终止 Tick 的剩余次数；结算刻为 1 |
 | `own_move` | 自己的当前拳型，包含同时模式中已暂存的拳型；未提交时为 `null` |
 | `opponent_committed` | 对手是否已在此前 Tick 提交出拳 |
-| `history` | 本局截至快照边界的公开事件，包含当前 Tick 已公开聊天，以及此前的提交/修改状态、WAIT、提醒等 |
+| `history` | 本局 history_after 之后、event_cursor 以内的新公开事件；较早事件保留在此前消息中，可能包含聊天、提交/修改状态、WAIT、提醒等 |
 
-state.history 每条事件包含 `sequence`、`tick`、`kind`、`player` 和 `text`，sequence 在本局内从 1 开始，等于公共事件的顺序位置。结算前的提交或改拳事件不包含拳型。系统消息的 player 为 null。上一局及赛后公开报告的事件仍按数组顺序记录。
+state.history 每条事件包含 `sequence`、`tick`、`kind`、`player` 和 `text`，sequence 在本局内从 1 开始，等于公共事件的顺序位置。结算前的提交或改拳事件不包含拳型。系统消息的 player 为 null。模型请求中，上一局与赛后报告的每局记录也带 history_after、event_cursor，其 events 带 sequence 并仅包含未读事件；局号和 sequence 共同标识事件，文本相同的两次发言不会合并。
+
+增量只作用于模型消息的构建，裁判视图、存档和人类可见的公开记录保留完整事件。空 history / events 只说明没有新增事件，不表示本局没有发生事件。双方因请求时序而收到不同增量，但结合各自保留的历史能够还原相同的公开记录。
 
 | `request_reasons` 值 | 含义 |
 | --- | --- |
@@ -290,9 +296,9 @@ state.history 每条事件包含 `sequence`、`tick`、`kind`、`player` 和 `te
 
 触发原因在派发请求时消费，重试保持不变。忙碌期间到来的通知留到下一次请求；新请求使用最新视图，通知不额外占用行动次数，也不保证聊天一定在结算前完成。
 
-`correction` 在每次交互的首次请求时为 null；重试时为仅提供给该玩家的错误反馈。历史保留自己已收到的反馈和完整响应，包括随后判为格式无效的响应；无效动作不执行。网络失败不追加未配对的用户消息。被结算或取消丢弃的整次交互回退历史，不把对手原始响应、私有分析或错误反馈混入上下文。
+`correction` 在每次交互的首次请求时为 null；重试时为仅提供给该玩家的错误反馈。历史保留自己已收到的反馈和完整响应，包括随后判为格式无效的响应；无效动作不执行。网络失败不追加未配对的用户消息，也不推进已提供事件边界。重试固定使用原状态和原增量，避免消费生成期间的新消息。被结算或取消丢弃的整次交互一并回退历史、各局事件边界及结果已提供标记，不把对手原始响应、私有分析或错误反馈混入上下文。
 
-`match` 包含当前局号 `game`、`best_of`、`target_wins`、`max_games`、出拳模式 `move_policy`、行动模式 `initiative`、本局先手 `first_player`、累计胜局 `wins`（以席位与名称为键）、平局数 `draws`，以及上一局公开记录 `last_game`。第一局的 last_game 为 null，此后包含上一局的公开事件（包括揭晓的拳型）、结束原因和胜者。更早各局保留在对话历史中；state.history 只包含当前局截至快照边界的公开事件。
+`match` 包含当前局号 `game`、`best_of`、`target_wins`、`max_games`、出拳模式 `move_policy`、行动模式 `initiative`、本局先手 `first_player`、累计胜局 `wins`（以席位与名称为键）和平局数 `draws`。第一局的 `last_game` 为 null；此后首次提供上一局结果时附带 last_game，包含局号、尚未提供的公开事件（含揭晓拳型）、结束原因和胜者。该次交互后的新请求省略 last_game，重试仍保留原快照。更早记录保留在对话历史中，首次赛后请求补齐最后一局的事件和结果。
 
 ### 11.2 输出格式
 
@@ -333,6 +339,7 @@ analysis 为 off 或 optional 时，单独 `{"actions":[{"type":"ENDTURN"}]}` �
 - 每场比赛创建两位玩家，并明确清空其对话历史；同场比赛的所有局复用这两位玩家。
 - 每局创建全新的 GameState，继承本场固定的 move_policy。Tick 从 1 开始，出拳清空，当前局的 history 为空，首次请求的当前纠错信息为空。
 - **同一场 BO 内保留上下文**：模型能够记住之前各局的公开交流、最终拳型、结果、比分，以及自己的响应、策略分析和纠错历史，并据此调整策略。
+- 新消息增量提供公开事件和局间结果，不重复追加整局记录；每次 Chat Completions 请求仍发送保留的完整消息列表。该优化减少重复资料，不删除原始交流，不保证上下文停止增长。
 - 下一局开始时向双方提供上一局的公开结果。聊天即时公开；同时模式的提交状态仍等双方结束行动后公开。比赛期间对手的策略分析不可见，错误反馈始终不向对手提供。
 - **新比赛清空上下文**，即使程序内部复用玩家对象，也必须清空上一场比赛的历史。日志只供人类查看，不读取日志来构建上下文。
 - 当前保留完整对话历史，不自动截断或摘要；达到服务上下文限制时，按请求技术错误处理（行动中止、赛中聊天跳过、赛后聊天中止），不静默清除记忆。`max_output_tokens` 是单次输出上限，不是整场上下文上限。
@@ -354,6 +361,8 @@ analysis 为 off 或 optional 时，单独 `{"actions":[{"type":"ENDTURN"}]}` �
 新日志的 player、winner、players 和 thinking 使用带 Red / Blue 的显示名称，wins 为该名称到胜局数的映射。目录固定为 red 和 blue，不从模型名或昵称生成路径。模型发言、策略分析和 HTTP 原文不改写。比赛开始记录模式、思考和分析设置；request_config 记录实际模型与请求参数。
 
 debug.log 每行一个 JSON 对象，带时间戳；请求记录含局号、快照 Tick、玩家、阶段 phase（game/chat/postmatch），每次尝试带 attempt（1 至 3）。每次交互有 request_id，重试沿用编号。request_start.state.request_reasons 记录赛中触发原因；interaction_applied 记录赛中实际应用的 Tick、聊天事件序号、是否结束行动或保持沉默；request_discarded 标记结算及取消时未应用的交互。赛后使用局号 0、Tick 0，postmatch_response 记录通过校验的响应，postmatch_applied 与 postmatch_event 记录实际发布的消息及退出，postmatch_end 记录双方退出状态与技术错误。模拟玩家不产生 HTTP 或用量事件；前台和 chat.log 仅展示实际公开的消息。
+
+request_start 保存完整裁判快照，http_request 保存实际发给服务的增量消息及历史。赛后触发原因在 request_start.context.request_reasons 中；postmatch_response 与 postmatch_applied 的 silent 区分暂时沉默和退出。postmatch_idle / postmatch_resumed 记录待机与人工恢复，thought.log 明确显示暂时沉默。
 
 原始 usage 按接口返回保存。每次真实请求结束或失败时另记 context_usage：input_tokens 为 prompt_tokens（兼容 input_tokens）；input_tokens_delta 为与相邻请求的变化；peak_input_tokens 为本场已知单次峰值；known_input_tokens_total 为已报告输入的累计；missing_usage_requests 记录用量缺失次数。仅接受非负整数，缺失记为 null；没有相邻完整数据时不计算变化。message_count 和 input_characters 分别统计实际发送的消息数与正文字符数，不当作 token 估算。
 
@@ -378,30 +387,35 @@ thought.log 使用中文分段文本，按局号、Tick、响应编号、尝试�
 - 接口响应回显已知 API key 时仍完成脱敏，鉴权头不进入日志。
 - 日志故障能停止比赛，已写入的记录保留。
 - 整场 BO 结束前不公开策略分析；赛后按行动顺序公开已执行动作与分析，锁定后忽略的 MOVE 单独标记，失败响应不公开。
-- 双方首次收到相同比赛记录；后续新消息送达对手，不重复附带比赛报告。赛后不执行游戏动作、不改变比分；一方 EXIT 后不再请求它，另一方可继续聊天，双方 EXIT 后正常结束。
+- 双方保留的历史与首次赛后增量能够还原同一份公开比赛记录；结算揭晓、结果与公开分析完整送达。后续新消息送达对手，不重复附带比赛报告。
+- 赛后不执行游戏动作、不改变比分；一方 EXIT 后不再请求它，另一方可继续聊天或沉默，双方 EXIT 后正常结束。沉默不轮询、不伪造退出，新消息或终端 /resume 可以恢复交流。
 - 技术异常中止不自动公开说明或请求赛后聊天；赛后聊天取消或日志故障能够清理并发请求。
 
 ## 15. 赛后公开与赛后聊天
 
 整场 BO 产生冠军或达到总局数上限后，先保存结果，再公开所有已完成 Tick 的有效动作、正文策略分析、公开事件与结果；单局结束不提前公开分析。技术异常或用户中止不自动公开分析或开始赛后聊天。
 
-公开材料来自内存中的 MatchArchive，不通过读取日志恢复。锁定后被忽略的改拳以 ignored_actions 单列；失败响应、未完成 Tick 暂存动作、私有纠错和接口思考不进入公共报告。未提交 ANALYZE 时 summary 为 null，不补写分析。公共材料先过滤本次密钥，CLI 与双方模型获得同一份公开报告。
+公开材料来自内存中的 MatchArchive，不通过读取日志恢复。锁定后被忽略的改拳以 ignored_actions 单列；失败响应、未完成 Tick 暂存动作、私有纠错和接口思考不进入公共报告。未提交 ANALYZE 时 summary 为 null，不补写分析。公共材料先过滤本次密钥，再向 CLI 展示、向模型增量提供，双方能够获得的公共资料一致。
 
 ### 15.1 延续本场历史
 
-保留每位玩家自己的全部本场 user/assistant 消息与规则提示。首次请求追加同一最终公共报告和简短聊天邀请；双方的私有历史不合并，接口思考不回填。对话历史管理使用 Chat Completions 的消息列表方式，见 [OpenAI 会话状态文档](https://developers.openai.com/api/docs/guides/conversation-state)。
+保留每位玩家自己的全部本场 user/assistant 消息与规则提示。首次请求追加最终结果、各局有效动作与公开分析，公开事件按各席位已保留的边界补齐，并附简短聊天邀请；双方的私有历史不合并，接口思考不回填。对话历史管理使用 Chat Completions 的消息列表方式，见 [OpenAI 会话状态文档](https://developers.openai.com/api/docs/guides/conversation-state)。
 
-每次请求带 phase=postmatch、player、request_id、event_cursor、events、exited、correction；只有首次邀请包含 match 报告。events 是自上次请求以来的新赛后公开事件，sequence 从 1 递增，kind 为 say 或 exit，发言另带 text。exited 按玩家记录退出状态。快照在同一请求的重试间不变，生成期间的新消息下一次提供。
+每次请求带 phase=postmatch、player、request_id、event_cursor、events、exited、request_reasons、correction；只有首次邀请包含 match 报告。events 是自上次请求以来的新赛后公开事件，sequence 从 1 递增，kind 为 say 或 exit，发言另带 text。exited 按玩家记录退出状态。快照在同一请求的重试间不变，生成期间的新消息下一次提供。
 
-初次同时邀请双方；之后由对手新发言或退出触发请求，忙碌时合并通知，每位玩家最多一个在途请求。最后留在聊天中的玩家始终有继续发言或退出的机会。不设固定聊天轮数，不要求讨论赛况，也不要求 ANALYZE 或 ENDTURN。
+初次同时邀请双方；之后由对手新发言或退出触发请求，忙碌时合并通知，每位玩家最多一个在途请求。最后留在聊天中的模型发言后可继续响应；返回沉默便停止请求，不因对手已经退出而空转。不设固定聊天轮数，不要求讨论赛况，也不要求 ANALYZE 或 ENDTURN。
 
-仅接受一个或多个 SAY，或者 EXIT；EXIT 无参数、最多一次且必须在最后，可先 SAY 再 EXIT：
+request_reasons 的值为 postmatch_start（首次邀请）、opponent_event（对手新发言或退出）、operator_resume（终端恢复）、continue_after_exit（对手退出后继续发言）；一次请求可以合并多个原因。
+
+接受一个或多个 SAY、EXIT 或空 actions；EXIT 无参数、最多一次且必须在最后，可先 SAY 再 EXIT：
 
 ```json
 {"actions":[{"type":"SAY","text":"刚才那局很有意思，下次再玩！"},{"type":"EXIT"}]}
 ```
 
-只想离开可返回 `{"actions":[{"type":"EXIT"}]}`，不能用空 actions 挂起赛后聊天。整份校验通过后按顺序公开发言与退出；一方退出后不再请求它，另一方可继续发言，双方 EXIT 后才正常结束。人类通过 /say 与 /exit 持续输入，不受 API 超时限制，也不需要等待对手回复才能再次发言或退出。
+只想离开可返回 `{"actions":[{"type":"EXIT"}]}`；`{"actions":[]}` 表示暂时沉默，仍留在聊天中，不发布空消息、不立即重试或唤醒对手。整份校验通过后按顺序公开发言与退出；一方退出后不再请求它，双方 EXIT 后才正常结束。人类通过 /say 与 /exit 持续输入，不受 API 超时限制，也不需要等待对手回复才能再次发言或退出。
+
+人类在场时保持输入接收，新发言可唤醒沉默模型。没有任何在途请求、但仍有玩家未退出时，调度器等待 on_idle 外部恢复；CLI 显示赛后控制提示，操作者输入 /resume 邀请所有仍在场的模型响应一次，不产生玩家发言、不恢复已退出席位。再次沉默则继续待机。没有交互终端或调用方未提供恢复回调时，等待外部取消，不自动请求模型或伪造结束。Ctrl+C 中止并保留日志。
 
 赛后聊天不增加行动、不修改比分；analysis=off 不关闭赛后聊天。新 BO 的 start_match 清空上一场对局和赛后聊天历史。
 

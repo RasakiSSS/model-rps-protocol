@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 import httpx
 
-from fixtures import postmatch_payload, turn_payload
+from fixtures import complete_public_report, postmatch_payload, turn_payload
 from model_rps.cli import main, make_parser
 from model_rps.config import RuntimeConfig, load_config
 
@@ -132,7 +132,7 @@ class SeatConfigTests(unittest.TestCase):
                 contexts.append(ctx)
                 self.assertNotIn('NATIVE-PRIVATE', json.dumps(body))
                 if ctx['phase'] == 'postmatch':
-                    postmatchs.append(ctx)
+                    postmatchs.append(body)
                     content = postmatch_payload('结合本场聊天复盘。')
                 else:
                     state = ctx['state']
@@ -162,7 +162,8 @@ class SeatConfigTests(unittest.TestCase):
             self.assertEqual(list(action_calls.values()), [2, 2, 2, 2])
             self.assertTrue(any(c['phase'] == 'chat' for c in contexts))
             self.assertEqual(len(postmatchs), 2)
-            self.assertEqual(postmatchs[0]['match'], postmatchs[1]['match'])
+            self.assertEqual(complete_public_report(postmatchs[0]['messages']),
+                             complete_public_report(postmatchs[1]['messages']))
             self.assertNotIn('NATIVE-PRIVATE', out.getvalue())
             self.assertNotIn('PRIVATE-', out.getvalue().split('赛后公开')[0])
             self.assertIn('聊天回复', out.getvalue())

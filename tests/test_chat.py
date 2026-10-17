@@ -266,6 +266,11 @@ class ChatSchedulerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.wins, (2, 0))
         self.assertEqual(cancelled, [1, 2])
         self.assertNotIn('STALE-RESPONSE', json.dumps(bodies[-1]))
+        next_game = next(json.loads(body['messages'][-1]['content']) for body in bodies
+                         if json.loads(body['messages'][-1]['content']).get('match', {}).get('game') == 2)
+        previous = next_game['match']['last_game']
+        self.assertEqual(previous['history_after'], 0)
+        self.assertIn('等我一下', [event['text'] for event in previous['events']])
         self.assertEqual(len([r for r in records if r['kind'] == 'request_discarded']), 2)
 
     async def test_external_cancellation_closes_action_and_chat_tasks(self):

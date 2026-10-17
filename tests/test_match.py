@@ -138,8 +138,13 @@ class MatchTests(unittest.IsolatedAsyncioTestCase):
                     self.assertIn(f"PUBLIC-{opponent}", json.dumps(payload))
                     self.assertIsNone(context["correction"])
                     self.assertEqual(context["match"]["wins"], {"A": context["match"]["game"] - 1, "B": 0})
-                    self.assertEqual(context["match"]["last_game"]["result"]["winner"], "A")
-                    revealed = [e["text"] for e in context["match"]["last_game"]["events"] if e["kind"] == "reveal"]
+                    previous = [json.loads(m['content']).get('match', {}).get('last_game')
+                                for m in payload['messages'] if m['role'] == 'user']
+                    previous = [g for g in previous if g and g['game'] == context['match']['game'] - 1]
+                    self.assertEqual(len(previous), 1)
+                    self.assertEqual('last_game' in context['match'], context['state']['tick'] == 1)
+                    self.assertEqual(previous[0]["result"]["winner"], "A")
+                    revealed = [e["text"] for e in previous[0]["events"] if e["kind"] == "reveal"]
                     self.assertEqual(revealed, ["Paper", "Rock"])
                     if context["match"]["game"] == 3:
                         previous_user_games = [json.loads(m["content"])["match"]["game"]
