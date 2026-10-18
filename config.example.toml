@@ -1,4 +1,4 @@
-# Model RPS 配置参考（v0.11.1）
+# Model RPS 配置参考（v1.0.0）
 #
 # 首次使用
 # 1. 程序不会自动创建 config.toml；首次使用真实模型前，复制本文件为 config.toml。

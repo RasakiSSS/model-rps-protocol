@@ -1,8 +1,15 @@
 # Model RPS
 
+[![Release](https://img.shields.io/badge/release-v1.0.0-blue)](https://github.com/RasakiSSS/model-rps-protocol/releases/tag/v1.0.0)
+[![Python](https://img.shields.io/badge/python-3.12%2B-3776AB)](pyproject.toml)
+[![Interface](https://img.shields.io/badge/interface-CLI-4B8BBE)](#终端操作)
+[![Model adapters](https://img.shields.io/badge/model_adapters-6-6A5ACD)](MODEL_ADAPTERS.md)
+
 让人类与大语言模型，或两个独立的模型，在命令行中聊天、等待和出拳。Python 裁判负责规则、信息隔离和胜负判定；比赛结束后，双方沿用各自上下文继续聊天。
 
-当前版本 **0.11.1**。支持任意正奇数 BO、Red / Blue 席位、同模型对战、人类玩家、独立聊天、同时或轮流行动、局中模型接管，以及比赛之间换人。已接入 OpenAI、DeepSeek、GLM、Gemini、Grok 和 Claude 的参数方案。项目用于观察博弈行为，不预设模型必须聊天，也不把单场胜负当作能力排名。
+支持任意正奇数 BO、Red / Blue 席位、同模型对战、人类玩家、独立聊天、同时或轮流行动、局中模型接管，以及比赛之间换人。已接入 OpenAI、DeepSeek、GLM、Gemini、Grok 和 Claude 的参数方案。项目用于观察博弈行为，不预设模型必须聊天，也不把单场胜负当作能力排名。
+
+**[下载 v1.0.0](https://github.com/RasakiSSS/model-rps-protocol/releases/tag/v1.0.0)** · [版本说明](CHANGELOG.md)
 
 | 要找的内容 | 位置 |
 | --- | --- |
@@ -14,7 +21,7 @@
 
 ## 安装与首次使用
 
-需要 Python 3.12 或更高版本。下载源码后，在项目根目录打开终端；已有虚拟环境时跳过创建步骤。
+需要 Python 3.12 或更高版本。可在 Release 页下载并解压 **Source code (zip)**，或按下面的命令克隆仓库。进入项目根目录后创建环境并安装依赖；已有虚拟环境时跳过创建步骤。发布包为源码，仍需安装 Python 和依赖。
 
 Windows PowerShell：
 
@@ -34,7 +41,7 @@ python3 -m venv .venv
 ./.venv/bin/python -m pip install -e .
 ```
 
-也可以从 GitHub 的 Code → Download ZIP 下载。Python 启动器中的版本号按实际安装版本调整；以下示例直接调用虚拟环境，无需激活。
+下载 ZIP 的用户从创建 `.venv` 的步骤开始。Python 启动器中的版本号按实际安装版本调整；以下示例直接调用虚拟环境，无需激活。
 
 **首次运行不会自动创建 config.toml。** 使用真实模型前，复制 [配置模板](config.example.toml)，然后按其中注释填写。已有配置时直接编辑，不要覆盖：
 
@@ -46,7 +53,24 @@ macOS / Linux 使用 `cp config.example.toml config.toml`。离线演示不需�
 
 ## 启动参数
 
-以下命令在项目根目录执行。macOS / Linux 将 `.\.venv\Scripts\python.exe` 替换为 `./.venv/bin/python`。安装后也可用 `model-rps` 入口，参数相同。
+Windows 推荐使用根目录的 [run.ps1](run.ps1)，它调用本项目 `.venv` 中的 Python，接受下表所有参数，并保留程序退出码。脚本不创建配置或安装依赖。
+
+```powershell
+# 在项目根目录启动；后面可追加任意现有参数
+.\run.ps1
+.\run.ps1 --no-config --mode demo --bo 3
+.\run.ps1 --help
+```
+
+脚本以所在项目目录作为工作目录，因此默认配置、日志和相对路径均相对于项目目录；从其他目录调用时也一样。需要指定其他位置的文件时可以使用绝对路径。
+
+如果 PowerShell 提示禁止运行脚本，可以只对本次进程指定执行策略：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\run.ps1 --help
+```
+
+下面保留 Python 入口示例，与脚本参数相同，均在项目根目录执行。macOS / Linux 将 `.\.venv\Scripts\python.exe` 替换为 `./.venv/bin/python`。安装后也可用 `model-rps` 入口。
 
 ### 常用启动方式
 
