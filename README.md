@@ -1,15 +1,16 @@
 # Model RPS
 
-[![Release](https://img.shields.io/badge/release-v1.0.0-blue)](https://github.com/RasakiSSS/model-rps-protocol/releases/tag/v1.0.0)
+[![Release](https://img.shields.io/badge/release-v1.0.1-blue)](https://github.com/RasakiSSS/model-rps-protocol/releases/tag/v1.0.1)
 [![Python](https://img.shields.io/badge/python-3.12%2B-3776AB)](pyproject.toml)
 [![Interface](https://img.shields.io/badge/interface-CLI-4B8BBE)](#终端操作)
 [![Model adapters](https://img.shields.io/badge/model_adapters-6-6A5ACD)](MODEL_ADAPTERS.md)
+[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 让人类与大语言模型，或两个独立的模型，在命令行中聊天、等待和出拳。Python 裁判负责规则、信息隔离和胜负判定；比赛结束后，双方沿用各自上下文继续聊天。
 
 支持任意正奇数 BO、Red / Blue 席位、同模型对战、人类玩家、独立聊天、同时或轮流行动、局中模型接管，以及比赛之间换人。已接入 OpenAI、DeepSeek、GLM、Gemini、Grok 和 Claude 的参数方案。项目用于观察博弈行为，不预设模型必须聊天，也不把单场胜负当作能力排名。
 
-**[下载 v1.0.0](https://github.com/RasakiSSS/model-rps-protocol/releases/tag/v1.0.0)** · [版本说明](CHANGELOG.md)
+**[下载 v1.0.1](https://github.com/RasakiSSS/model-rps-protocol/releases/tag/v1.0.1)** · [版本说明](CHANGELOG.md)
 
 | 要找的内容 | 位置 |
 | --- | --- |
@@ -18,6 +19,7 @@
 | 裁判规则、信息边界、请求与日志数据 | [PROTOCOL.md](PROTOCOL.md) |
 | 接口适配、官方资料与实测限制 | [MODEL_ADAPTERS.md](MODEL_ADAPTERS.md) |
 | 下一版计划与尚待确定的问题 | [ROADMAP.md](ROADMAP.md) |
+| 项目许可证与第三方依赖声明 | [LICENSE](LICENSE)、[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) |
 
 ## 安装与首次使用
 
@@ -302,3 +304,9 @@ logs/日期时间_唯一编号/
 ```
 
 测试使用 unittest、模拟 HTTP 和异步输入，不调用真实模型。覆盖规则、权限与信息隔离、调度与取消、配置、模型适配、流式接收、日志、BO 记忆，以及人类输入、局中交接、赛后待机和连续比赛。真实服务的测试日期与边界单独记录在模型适配文档中。
+
+## 许可证
+
+本项目自身的代码和文档采用 [MIT License](LICENSE)，Copyright (c) 2026 RasakiSSS。
+
+第三方依赖保留各自的版权及许可证。依赖清单、许可范围和原始声明副本见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) 与 [LICENSES](LICENSES/)；本项目的 MIT 授权不替代这些第三方条款。

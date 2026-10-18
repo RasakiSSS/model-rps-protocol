@@ -1,6 +1,6 @@
 # Model RPS：现行协议
 
-适用版本：v1.0.0。最后更新：2026-10-18。
+适用版本：v1.0.1。最后更新：2026-10-19。
 
 本文约定裁判、玩家视图、调度与数据记录。安装、启动参数与终端操作见 [README](README.md)；配置字段与默认值见 [config.example.toml](config.example.toml)；厂商接口细节见 [MODEL_ADAPTERS.md](MODEL_ADAPTERS.md)。
 
