@@ -82,6 +82,7 @@ async def _request(player: MatchPlayer, context: dict, policy: RequestPolicy,
             started = perf_counter()
             trace("request_start", context=deepcopy(context), correction=feedback)
             retryable = True
+            raw = None
             try:
                 async with asyncio.timeout(None if getattr(player, "interactive", False) else policy.timeout):
                     raw = await player.postmatch(deepcopy(context), feedback)
@@ -96,6 +97,7 @@ async def _request(player: MatchPlayer, context: dict, policy: RequestPolicy,
                 trace("request_end", status="cancelled", elapsed_seconds=perf_counter() - started)
                 raise
             except InvalidResponse as exc:
+                trace("validation_error", content=raw, error=str(exc))
                 summary = "赛后聊天格式无效"
                 feedback = f"{exc} 请返回完整 JSON，使用 SAY 发言、空 actions 暂时沉默或 EXIT 退出。"
             except TimeoutError:

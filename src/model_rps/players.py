@@ -17,7 +17,7 @@ from .context_usage import ContextUsage
 from .history import ConversationHistory, HistoryCheckpoint
 from .diagnostics import trace
 from .identities import named_data
-from .prompts import POSTMATCH_PROMPT, game_prompt
+from .prompts import GROK_STREAM_FORMAT_PROMPT, POSTMATCH_PROMPT, game_prompt
 from .adapters import (ModelSpec, MODEL_ADAPTERS, DEEPSEEK, OPENAI, configure_thinking,
                        DEEPSEEK_THINKING_MODES, OPENAI_THINKING_MODES)
 from .transport import ModelTransport, PlayerError
@@ -109,8 +109,14 @@ class ChatCompletionPlayer:
             stream=stream, first_timeout=stream_first_timeout, idle_timeout=stream_idle_timeout)
         self.start_match()
 
+    def _game_prompt(self, move_policy="locked", initiative="simultaneous") -> str:
+        prompt = game_prompt(move_policy, initiative, self.analysis_policy)
+        if self.stream and self.spec.thinking_api == "grok":
+            prompt += "\n" + GROK_STREAM_FORMAT_PROMPT
+        return prompt
+
     def start_match(self) -> None:
-        self._history = ConversationHistory(game_prompt("locked", analysis=self.analysis_policy))
+        self._history = ConversationHistory(self._game_prompt())
         self._messages = self._history.messages
         self._match_context = None
         self._context_usage = ContextUsage()
@@ -131,7 +137,7 @@ class ChatCompletionPlayer:
         self._history.receive_handoff(context, message)
 
     async def respond(self, view: PlayerView, feedback: str | None = None) -> ModelResponse:
-        self._messages[0] = {"role": "system", "content": game_prompt(view.move_policy, view.initiative, self.analysis_policy)}
+        self._messages[0] = {"role": "system", "content": self._game_prompt(view.move_policy, view.initiative)}
         context = self._history.game_context(view, self._match_context, feedback)
         user_message = {"role": "user", "content": json.dumps(named_data(context, self.names), ensure_ascii=False)}
         response = await self._complete([*self._messages, user_message])

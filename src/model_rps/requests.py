@@ -59,7 +59,7 @@ def validated_response(player, view, raw, *, has_reasoning=False) -> RequestResu
               ignored_actions=[action.to_dict() for action in decision.actions
                                if ignored_move(action, view.own_move, view.move_policy)])
     else:
-        trace("chat_validated", message_count=len(interaction.messages))
+        trace("chat_validated", message_count=len(interaction.messages), messages=interaction.messages)
     return RequestResult(view, interaction)
 
 
@@ -81,6 +81,7 @@ async def request_interaction(player: Player, view: PlayerView, policy: RequestP
                            phase="game" if view.can_act else "chat", request_id=view.request_id):
             started = perf_counter()
             retryable = True
+            raw = None
             trace("request_start", state=view.to_dict(), correction=feedback)
             try:
                 # 覆盖整个请求的时限，不只限制网络中两次数据之间的等待。
@@ -97,6 +98,7 @@ async def request_interaction(player: Player, view: PlayerView, policy: RequestP
                 trace("request_end", status="cancelled", elapsed_seconds=perf_counter() - started)
                 raise
             except InvalidResponse as exc:
+                trace("validation_error", content=raw, error=str(exc))
                 feedback = f"本次响应无效，整份动作均未执行。{exc} 请重新返回完整 JSON。"
                 summary = "响应格式或动作无效"
             except TimeoutError:

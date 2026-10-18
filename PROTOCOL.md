@@ -1,6 +1,6 @@
 # Model RPS：现行协议
 
-适用版本：v0.10.0。最后更新：2026-10-18。
+适用版本：v0.11.1。最后更新：2026-10-18。
 
 本文约定裁判、玩家视图、调度与数据记录。安装、启动参数与终端操作见 [README](README.md)；配置字段与默认值见 [config.example.toml](config.example.toml)；厂商接口细节见 [MODEL_ADAPTERS.md](MODEL_ADAPTERS.md)。
 
@@ -308,9 +308,15 @@ request_reasons 的值为 postmatch_start（首次邀请）、opponent_event（�
 
 新日志的 player、winner、players 和 thinking 使用带 Red / Blue 的显示名称，wins 为该名称到胜局数的映射。目录固定为 red 和 blue，不从模型名或昵称生成路径。模型发言、策略分析和 HTTP 原文不改写。比赛开始记录模式、思考和分析设置；request_config 记录实际模型与请求参数。
 
-debug.log 每行一个 JSON 对象，带时间戳；请求记录含局号、快照 Tick、玩家、阶段 phase（game/chat/postmatch），每次尝试带 attempt（1 至 3）。每次交互有 request_id，重试沿用编号。request_start.state.request_reasons 记录赛中触发原因；interaction_applied 记录赛中实际应用的 Tick、聊天事件序号、是否结束行动或保持沉默；request_discarded 标记结算及取消时未应用的交互。赛后使用局号 0、Tick 0，postmatch_response 记录通过校验的响应，postmatch_applied 与 postmatch_event 记录实际发布的消息及退出，postmatch_end 记录双方退出状态与技术错误。模拟玩家不产生 HTTP 或用量事件；前台和 chat.log 仅展示实际公开的消息。
+debug.log 每行一个 JSON 对象，带时间戳和本场统一递增的 log_sequence；后者跨双方文件编号，用于还原同一毫秒内的写入顺序，不是公开事件编号。请求记录含局号、快照 Tick、玩家、阶段 phase（game/chat/postmatch），每次尝试带 attempt（1 至 3）。每次交互有 request_id，重试沿用编号。
+
+request_start.state.request_reasons 记录赛中触发原因。interaction_applied 记录聊天发布或行动接收时的 Tick、聊天事件序号、发言数、是否结束行动或保持沉默；pending_action 表示行动仍在等待双方同步推进。action_resolved 记录裁判实际执行的 Tick、首次出拳/修改/等待/忽略结果及本方实际拳型，沿用原请求编号与作者。尚未推进便中止的行动另记 action_discarded；结算及取消时未应用的请求记 request_discarded。
+
+赛后使用局号 0、Tick 0，postmatch_response 记录通过校验的响应，postmatch_applied 与 postmatch_event 记录实际发布的消息及退出，postmatch_end 记录双方退出状态与技术错误。模拟玩家不产生 HTTP 或用量事件；前台和 chat.log 仅展示实际公开的消息。
 
 request_start 保存完整裁判快照，http_request 保存实际发给服务的增量消息及历史。赛后触发原因在 request_start.context.request_reasons 中；postmatch_response 与 postmatch_applied 的 silent 区分暂时沉默和退出。postmatch_idle / postmatch_resumed 记录待机与人工恢复，thought.log 明确显示暂时沉默。
+
+chat_validated 保存通过校验的发言正文与数量；validation_error 保存校验失败原因及已取得的响应正文，尚未取得正文时为 null。错误后的 request_end 记录纠错反馈与是否重试；这些诊断不代表消息已公开。
 
 原始 usage 按接口返回保存。每次真实请求结束或失败时另记 context_usage：input_tokens 为 prompt_tokens（兼容 input_tokens）；input_tokens_delta 为与相邻请求的变化；peak_input_tokens 为本场已知单次峰值；known_input_tokens_total 为已报告输入的累计；missing_usage_requests 记录用量缺失次数。仅接受非负整数，缺失记为 null；没有相邻完整数据时不计算变化。message_count 和 input_characters 分别统计实际发送的消息数与正文字符数，不当作 token 估算。
 
@@ -326,7 +332,7 @@ thought.log 使用中文分段文本，按局号、Tick、响应编号、尝试�
 
 match_start.profiles 按显示席位记录选中的 profile，未引用时为 null；player_streaming 记录各席位生效的流式设置。每次 request_config 记录实际发送的模型、思考及流式参数。stream_delta 记录接收片段，stream_end 标记完整、未完成或取消，记录组装内容、结束原因与可用用量。跨分片的已知密钥前缀暂缓写入，结束时仍不完整则遮盖。
 
-局中接管不新建日志目录。公开事件、行动和请求诊断携带固定的 `actor` 标签；展示与序列化优先使用该标签，因此历史作者不受当前席位名称影响。`handoff` 诊断记录局号、Tick、原参与者、接管者及 profile 名称；接管模型的实际参数仍由 request_config 记录。所有已加载 profile 的密钥提前加入脱敏表，旧密钥文件中的接管密钥在首次请求前补入。
+局中接管不新建日志目录。公开事件、行动和请求诊断携带固定的 `actor` 标签；展示与序列化优先使用该标签，因此历史作者不受当前席位名称影响。`handoff` 诊断记录局号、Tick、原参与者、接管者及 profile 名称，以及交接的已完成局数、公共事件数、本席位分析与行动数、保留的拳型与锁定状态、行动权限和丢弃的草稿数量；接管模型的实际参数仍由 request_config 记录。所有已加载 profile 的密钥提前加入脱敏表，旧密钥文件中的接管密钥在首次请求前补入。
 
 ### 10.1 接口思考记录
 
@@ -358,6 +364,8 @@ Chat Completions 读取响应消息中非空字符串 `reasoning_content`，其�
 
 普通模式与调试模式的前台显示、交互相同。调试窗口只观察本场日志，不重复请求模型、不参与调度；关闭窗口不影响比赛。比赛结束后停止读取并保留内容；启动失败只报告简短提示，不把诊断信息改放到前台。连续比赛每场使用对应的观察窗口。
 
+调试窗口展示请求原因、权限、本方状态、新消息与实际参数，分段显示校验后的 ANALYZE、SAY、MOVE、ENDTURN 和赛后响应，并显示调度执行或丢弃结果。接口思考正文、原始成功响应、流式片段和完整 HTTP 请求仅保留在日志；窗口显示思考接收状态与可用用量。服务错误只提取错误字段，无效正文与长错误文本最多显示 4,000 字符并标明省略；不改动磁盘中的完整记录。双方记录按 log_sequence 合并，旧日志按时间戳尽力排序；换人前后名称都沿用固定席位颜色。
+
 启动参数、玩家指令、大厅与赛后恢复操作统一见 [README](README.md)。
 
 ## 12. 分层与项目结构
@@ -370,9 +378,11 @@ Chat Completions 读取响应消息中非空字符串 `reasoning_content`，其�
 | 模型传输 | adapters.py、transport.py、streaming.py、anthropic.py | 厂商参数、鉴权、HTTP、SSE 与协议转换；不管理比分 |
 | 赛后交流 | postmatch.py | 内存存档、公开分析、沿用历史的聊天、沉默与退出 |
 | 前台与大厅 | cli.py、lobby.py、human_terminal.py、console.py、terminal.py | 启动组装、异步输入、本地控制与展示 |
-| 日志与诊断 | logs.py、diagnostics.py、context_usage.py、debug_console.py、identities.py | 脱敏、私有记录、用量、观察窗口与席位归属 |
+| 日志与诊断 | logs.py、diagnostics.py、context_usage.py、debug_console.py、debug_format.py、identities.py | 脱敏、私有记录、用量、观察窗口、格式化展示与席位归属 |
 | 配置与提示词 | config.py、prompts.py | 启动校验和最小规则提示；不替代裁判 |
 
 源码位于 src/model_rps/，测试位于 tests/。对局提示词只包含目标、信息边界、规则与输出约束，不规定策略或分析步骤；赛后只追加简短邀请。修改提示词不自动修改共同指令与裁判逻辑。
+
+Grok 适配器在开启流式时额外要求 JSON 缩进换行、对象左花括号后换行，文字集中在 prompts.py；此约束随同一玩家的系统提示词用于对局、独立聊天、重试、接管及赛后。其他适配器和 Grok 非流式保持原有提示词。该措施只影响生成格式，不补写或修复已收到的响应；完整接收和指令校验要求不变。
 
 测试重点是信息隔离、完整响应校验、模式边界、请求取消和历史回退，以及 BO 结果、上下文生命周期、日志脱敏、流式收尾、终端交接与连续比赛。启动与测试命令见 README；后续扩展见 ROADMAP。
