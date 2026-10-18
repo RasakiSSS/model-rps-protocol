@@ -1,4 +1,4 @@
-# Model RPS 配置参考（v0.11.0）
+# Model RPS 配置参考（v0.11.1）
 #
 # 首次使用
 # 1. 程序不会自动创建 config.toml；首次使用真实模型前，复制本文件为 config.toml。
@@ -175,7 +175,9 @@ model = "grok-4.7"
 base_url = "https://api.x.ai/v1"
 api_key = ""
 thinking = "high"                    # low / medium / high / xhigh
-stream = false                      # 已测第三方服务的流式有兼容问题，见 MODEL_ADAPTERS.md
+stream = false                      # 可改 true；Grok 流式自动追加缩进换行 JSON 要求
+# 该格式要求用于各阶段及重试，无需新增配置；不自动补写损坏 JSON 或降级到非流式。
+# 这是针对部分服务缺字符的兼容措施，仍可能失败；实测范围见 MODEL_ADAPTERS.md。
 
 [profiles.claude]
 adapter = "anthropic"                # 原生 Messages，服务须支持对应端点及鉴权
