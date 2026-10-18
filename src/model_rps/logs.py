@@ -18,6 +18,7 @@ class RunLogs:
         self.add_secrets(*secrets)
         self.path = root / (datetime.now().strftime("%Y%m%d_%H%M%S_%f") + "_" + uuid4().hex[:8])
         self._files = {}
+        self._log_sequence = 0
         self._stream_tails = {}
         self._stream_layout = {}
         self.names = dict(names) if names is not None else None
@@ -72,7 +73,9 @@ class RunLogs:
         return value
 
     def _json(self, key, record: dict) -> None:
-        record = {"timestamp": datetime.now().astimezone().isoformat(timespec="milliseconds"), **record}
+        self._log_sequence += 1
+        record = {**record, "timestamp": datetime.now().astimezone().isoformat(timespec="milliseconds"),
+                  "log_sequence": self._log_sequence}
         # 先脱敏再编码，包含引号或反斜杠的密钥也不会破坏 JSON 行。
         if self.names:
             record = named_data(record, self.names)

@@ -34,7 +34,7 @@ class GameSession:
         self.on_request = on_request
         self.pending: dict[str, PendingRequest] = {}
         self.held = {}
-        self.held_actors = {}
+        self.held_requests = {}
         self.inboxes = {"A": [], "B": []}
         # 状态通知与聊天消息分别排队；同类通知合并，只在派发时消费。
         self.wake_reasons = {identity: {"game_start"} for identity in self.players}
@@ -153,7 +153,7 @@ class GameSession:
             # SAY 已公开，不再在裁判推进时重放；提交内容在同步边界前仅本人可见。
             self.held[identity] = tuple(action for action in interaction.decision.actions
                                         if alternating_action or action.kind != ActionKind.SAY)
-            self.held_actors[identity] = request.actor
+            self.held_requests[identity] = request
             remember = getattr(self.players[identity], "remember_decision", None)
             if remember is not None:
                 remember(request.view, interaction.decision, request.actor)
@@ -165,23 +165,25 @@ class GameSession:
             self.wake_reasons[identity].add("action_ended")
         self._record(request, "interaction_applied", applied_tick=tick,
                      event_sequences=sequences, ended_turn=interaction.decision is not None,
+                     pending_action=identity in self.held, message_count=len(interaction.messages),
                      silent=not interaction.messages and interaction.decision is None)
 
     def _finish_ready(self):
         previous = self.state
-        actors = {}
+        requests = {}
         if previous.initiative == Initiative.SIMULTANEOUS:
             if len(self.held) != 2:
                 return []
             self.state = advance(previous, self.held.pop("A"), self.held.pop("B"))
-            actors = self.held_actors.copy()
-            self.held_actors.clear()
+            requests = self.held_requests.copy()
+            self.held_requests.clear()
         else:
             identity = previous.current_player
             if identity not in self.held:
                 return []
             self.state = advance_turn(previous, identity, self.held.pop(identity))
-            actors[identity] = self.held_actors.pop(identity, None)
+            requests[identity] = self.held_requests.pop(identity)
+        actors = {identity: request.actor for identity, request in requests.items()}
         # 已结束的行动可以在换人后才进入同步边界；作者仍是提交它的人。
         events = tuple(replace(event, actor=actors.get(event.player, self._actor(event.player))
                                if event.player is not None else None)
@@ -193,6 +195,11 @@ class GameSession:
                 sequences.append(sequence)
                 self.inboxes["B" if event.player == "A" else "A"].append(sequence)
             self.emit(event)
+        for identity, request in requests.items():
+            self._record(request, "action_resolved", applied_tick=self.state.completed_ticks,
+                         outcomes=[event.kind for event in events if event.player == identity and
+                                   event.kind in ("commit", "revise", "wait", "move_ignored")],
+                         own_move=self.state.moves[0 if identity == "A" else 1])
         if self.state.result is None:
             reason = "turn_changed" if self.state.initiative == Initiative.ALTERNATING else "tick_started"
             for reasons in self.wake_reasons.values():
@@ -232,6 +239,7 @@ class GameSession:
             if request.result.cancelled():
                 return
             previous_name = seat.name
+            discarded_drafts = {"move": human.move is not None, "analysis_count": len(human.analysis)}
             seat.replace_player(replacement)
             human.detach()
             event = Event(self.state.completed_ticks + 1, "handoff", identity,
@@ -243,7 +251,13 @@ class GameSession:
             if self.on_request is not None:
                 self.on_request({"kind": "handoff", "player": identity, "tick": event.tick,
                                  "actor": replacement.name, "previous_player": previous_name,
-                                 "profile": replacement.profile})
+                                 "profile": replacement.profile, "completed_games": len(context["games"]),
+                                 "public_events": len(context["state"]["history"]) +
+                                     sum(len(game["events"]) for game in context["games"]),
+                                 "own_decisions": len(context["own_decisions"]),
+                                 "own_move": context["state"]["own_move"],
+                                 "own_move_locked": context["state"]["own_move_locked"],
+                                 "can_act": context["state"]["can_act"], "discarded_drafts": discarded_drafts})
             request.result.set_result(None)
         except ValueError as exc:
             request.result.set_exception(InvalidResponse(str(exc)))
@@ -260,6 +274,8 @@ class GameSession:
                 self.players[request.view.player].restore_history(request.checkpoint)
         for request in requests:
             self._record(request, "request_discarded", reason="对局结束或取消；响应未应用，历史已回退。")
+        for request in self.held_requests.values():
+            self._record(request, "action_discarded", reason="本局结束或取消，尚未推进的行动作废。")
 
     async def run(self) -> GameState:
         self.active = True

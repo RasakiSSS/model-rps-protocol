@@ -8,8 +8,8 @@ import subprocess
 import sys
 import threading
 import time
-import unicodedata
 
+from .debug_format import format_record
 from .terminal import color_names, supports_color
 
 
@@ -64,75 +64,6 @@ class LogTail:
         return records
 
 
-def format_record(row: dict) -> str | None:
-    """展示诊断概况；完整请求、思考和正文仍可在原始日志查看。"""
-    kind = row.get("kind")
-    if kind in {"stream_delta", "raw_response", "http_request", "http_error_body", "decision", "postmatch_response"}:
-        return None
-    label = row.get("player", "System")
-    if "attempt" in row or "request_id" in row:
-        phase = "赛后聊天" if row.get("phase") == "postmatch" else f"第 {row.get('game')} 局 Tick {row.get('tick')}"
-        if row.get("phase") == "chat":
-            phase += " · 聊天"
-        if row.get("request_id") is not None:
-            phase += f" · 响应 #{row['request_id']}"
-        label += f" · {phase}"
-        if "attempt" in row:
-            label += f" · 第 {row['attempt']} 次请求"
-    if kind == "tick":
-        detail = row["text"]
-    elif kind == "request_start":
-        detail = "等待响应"
-        reasons = row.get("state", row.get("context", {})).get("request_reasons", [])
-        labels = {"game_start": "开局", "turn_changed": "行动轮换", "tick_started": "新 Tick",
-                  "action_available": "行动机会", "action_ended": "自己的行动已结束", "opponent_say": "对手发言",
-                  "postmatch_start": "赛后邀请", "opponent_event": "对手发言或退出",
-                  "operator_resume": "终端恢复交流", "continue_after_exit": "对手离开后继续发言"}
-        if reasons:
-            detail += "；触发：" + "、".join(labels.get(reason, reason) for reason in reasons)
-        if row.get("correction"):
-            detail += "；纠错反馈：" + row["correction"]
-    elif kind == "stream_status":
-        detail = {"waiting": "等待响应", "thinking": "接收思考", "generating": "接收正文"}.get(row.get("status"), "接收中")
-    elif kind == "request_end":
-        detail = f"请求结束：{row.get('status')}；耗时 {row.get('elapsed_seconds', 0):.2f} 秒"
-        if row.get("error"):
-            detail += "；" + row["error"]
-        if row.get("will_retry"):
-            detail += "；将重试"
-    elif kind == "http_response":
-        detail = f"HTTP {row.get('status')}"
-    elif kind == "stream_end":
-        detail = f"流式接收结束：{row.get('status')}；分片 {row.get('chunks')}"
-    elif kind == "reasoning":
-        detail = f"思考：{row.get('status')}；token {row.get('reasoning_tokens')}"
-    elif kind == "context_usage":
-        current, delta = row.get("input_tokens"), row.get("input_tokens_delta")
-        detail = (f"输入 token：{current if current is not None else '未提供'}；"
-                  f"较上次：{format(delta, '+d') if delta is not None else '未知'}；"
-                  f"本场已知累计：{row.get('known_input_tokens_total')}；"
-                  f"用量缺失请求：{row.get('missing_usage_requests')}；消息数：{row.get('message_count')}")
-    elif kind == "interaction_applied":
-        if row.get("ended_turn"):
-            detail = "已应用：结束行动"
-        elif row.get("silent"):
-            detail = "已应用：保持沉默"
-        else:
-            detail = f"已应用：公开 {len(row.get('event_sequences', []))} 条发言"
-        detail += f"；应用于 Tick {row.get('applied_tick')}"
-    elif kind == "postmatch_applied":
-        detail = "保持沉默，仍在场" if row.get("silent") else f"已公开 {len(row.get('event_sequences', []))} 条赛后事件"
-        if row.get("exit"):
-            detail += "；玩家退出"
-    elif kind == "request_discarded":
-        detail = "响应未应用：" + row.get("reason", "对局结束或取消")
-    else:
-        detail = f"{kind}：" + json.dumps({key: value for key, value in row.items()
-                                           if key not in {"timestamp", "kind"}}, ensure_ascii=False)
-    text = f"[{row.get('timestamp', '')}] {label}：{detail}"
-    return "".join(f"\\u{ord(c):04x}" if unicodedata.category(c).startswith("C") else c for c in text)
-
-
 class ParentProcess:
     """保存父进程句柄，避免异常退出后窗口永久等待，或 PID 重用误判。"""
 
@@ -170,26 +101,52 @@ def watch(path: Path, *, parent: int | None = None, once: bool = False) -> None:
     process = ParentProcess(parent)
     color = supports_color()
     names = {"A": "Red", "B": "Blue"}
+    aliases = {}
+    buffered = {}
+    next_sequence = 1
     print("Model RPS · Debug（只读；关闭此窗口不会中止比赛）", flush=True)
     try:
         while True:
             batches = [tail.read() for tail in tails]
-            rows = [row for index, batch in enumerate(batches) for row in batch
-                    if index == 0 or "player" in row]  # 生命周期在双方日志中各有一份。
-            rows.sort(key=lambda row: row.get("timestamp", ""))
-            for row in rows:
+            rows = []
+            for index, batch in enumerate(batches):
+                for row in batch:
+                    sequence = row.get("log_sequence")
+                    if isinstance(sequence, int) and sequence >= next_sequence:
+                        buffered[sequence] = (index, row)
+                    elif sequence is None:
+                        rows.append((index, row))  # 旧日志按时间尽力排序。
+            rows.sort(key=lambda item: item[1].get("timestamp", ""))
+            # 保留跨文件的缺口，避免一方的长记录尚未读完时先展示另一方的新事件。
+            while next_sequence in buffered:
+                rows.append(buffered.pop(next_sequence))
+                next_sequence += 1
+            drained = not any(batches) and all(tail.eof for tail in tails)
+            finished = drained and (once or all(tail.closed for tail in tails) or not process.alive())
+            if finished:
+                # 异常终止或损坏日志可能缺行，退出前仍展示已能读取的后续记录。
+                rows.extend(buffered[key] for key in sorted(buffered))
+                buffered.clear()
+            for index, row in rows:
+                if index != 0 and "player" not in row:
+                    continue  # 生命周期在双方日志中各有一份。
                 if row.get("kind") == "match_start":
                     # 生命周期中的 players 是显示名映射，字典键已转换为显示名。
                     values = list(row.get("players", {}).values())
                     if len(values) == 2:
                         names = dict(zip(("A", "B"), values))
+                # 日志目录代表固定席位，换人后的名字和旧作者都沿用该席位颜色。
+                if row.get("player"):
+                    for name in (row["player"], row.get("actor"), row.get("previous_player")):
+                        if isinstance(name, str):
+                            aliases[name] = "A" if index == 0 else "B"
                 line = format_record(row)
                 if line:
-                    print(color_names(line, names) if color else line, flush=True)
+                    print(color_names(line, names, aliases=aliases) if color else line, flush=True)
             # 排空已有日志后再退出，避免一次读取上限导致尾部记录丢失。
-            if not any(batches) and all(tail.eof for tail in tails):
-                if once or all(tail.closed for tail in tails) or not process.alive():
-                    break
+            if finished:
+                break
+            if drained:
                 time.sleep(0.1)
         print("调试记录读取结束。", flush=True)
     finally:
