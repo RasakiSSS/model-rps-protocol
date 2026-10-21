@@ -12,8 +12,29 @@ license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md", "LICENSES/*"]
 requires-python = ">=3.12"
 dependencies = ["httpx>=0.28,<1", "prompt-toolkit>=3.0.52,<4"]
 
+[project.optional-dependencies]
+mcp = ["mcp==2.3.0"]
+dev = ["pytest>=8", "ruff>=0.6"]
+
 [project.scripts]
 model-rps = "model_rps.cli:main"
+model-rps-mcp = "model_rps.mcp_agent.server:main"
+model-rps-room = "model_rps.room.server:main"
+model-rps-join = "model_rps.room.client:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+extend-exclude = ["logs", "tmp*", ".pytest_tmp"]
+
+[tool.ruff.lint]
+select = ["F", "E9"]
+# Existing unused imports are cleaned up separately; keep this check from failing on them.
+ignore = ["F401"]

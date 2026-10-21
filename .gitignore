@@ -25,3 +25,10 @@ secrets.toml
 
 # Local match logs
 logs/
+
+# Temporary build, pip and test directories
+tmp*/
+pip-*/
+.pytest_tmp/
+
+# Validation and experiment scripts are tracked; their outputs live in logs/
