@@ -16,12 +16,12 @@ from prompt_toolkit.output import DummyOutput
 
 from fixtures import postmatch_payload, turn_payload
 from model_rps.cli import main
-from model_rps.console import Console
-from model_rps.game import GameState
-from model_rps.human import HumanPlayer
-from model_rps.human_terminal import HumanTerminal, UserInterrupted, wait_for_resume
-from model_rps.identities import player_names
-from model_rps.logs import RunLogs
+from model_rps.ui.console import Console
+from model_rps.core.game import GameState
+from model_rps.players.human import HumanPlayer
+from model_rps.ui.human_terminal import HumanTerminal, UserInterrupted, wait_for_resume
+from model_rps.core.identities import player_names
+from model_rps.core.logs import RunLogs
 from test_human import until
 
 
@@ -177,7 +177,7 @@ class TerminalTests(unittest.IsolatedAsyncioTestCase):
     async def test_default_session_uses_same_app_and_enter_binding_with_term_dumb(self):
         with create_pipe_input() as pipe, create_app_session(input=pipe, output=DummyOutput()), \
                 patch.dict(os.environ, {'TERM': 'dumb'}), \
-                patch('model_rps.human_terminal.create_output', return_value=DummyOutput()):
+                patch('model_rps.ui.human_terminal.create_output', return_value=DummyOutput()):
             player = HumanPlayer()
             terminal = HumanTerminal(player, 'A', Console(player_names('human', 'model')))
             player.start_game({'game': 1})  # 与 CLI 一样，创建终端之后才开始本局。
@@ -286,7 +286,7 @@ class IdleTerminalTests(unittest.IsolatedAsyncioTestCase):
                 await asyncio.gather(task, return_exceptions=True)
 
     async def test_after_human_exit_same_terminal_switches_to_resume_without_overlapping_prompts(self):
-        from model_rps.postmatch import run_postmatch
+        from model_rps.engine.postmatch import run_postmatch
         from test_postmatch import ChatParticipant, FAST, REPORT, VALID
 
         with create_pipe_input() as pipe:
@@ -323,8 +323,8 @@ class IdleTerminalTests(unittest.IsolatedAsyncioTestCase):
                 session.prompt_async = AsyncMock(side_effect=error)
                 with self.assertRaises(UserInterrupted):
                     await wait_for_resume(console, session)
-        with patch('model_rps.human_terminal.sys.stdin.isatty', return_value=False), \
-                patch('model_rps.human_terminal.PromptSession') as prompt:
+        with patch('model_rps.ui.human_terminal.sys.stdin.isatty', return_value=False), \
+                patch('model_rps.ui.human_terminal.PromptSession') as prompt:
             task = asyncio.create_task(wait_for_resume(console))
             try:
                 await asyncio.sleep(.02)

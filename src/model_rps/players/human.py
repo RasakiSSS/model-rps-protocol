@@ -4,9 +4,9 @@ import asyncio
 from copy import deepcopy
 import json
 
-from .commands import AnalysisPolicy, CommandKind, parse_command_line, parse_interaction, parse_postmatch
-from .game import InvalidResponse, validate_turn
-from .players import PlayerInput
+from ..core.commands import AnalysisPolicy, CommandKind, parse_command_line, parse_interaction, parse_postmatch
+from ..core.game import InvalidResponse, validate_turn
+from .base import PlayerInput
 
 
 class HumanPlayer:

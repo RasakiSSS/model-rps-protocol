@@ -10,8 +10,8 @@ from prompt_toolkit.application import create_app_session
 from prompt_toolkit.output import create_output
 from prompt_toolkit.patch_stdout import patch_stdout
 
-from ..console import display_text
-from ..game import InvalidResponse
+from ..ui.console import display_text
+from ..core.game import InvalidResponse
 
 
 HELP = '/start 新开一场 · /stop 停止本场 · /status 状态 · /quit 关闭服务 · /help 帮助'

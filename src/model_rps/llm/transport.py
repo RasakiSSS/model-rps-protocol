@@ -7,7 +7,7 @@ import httpx
 
 from .adapters import auth_headers, endpoint, request_payload
 from .anthropic import MessagesStream, normalize_response, normalize_usage
-from .diagnostics import trace
+from ..core.diagnostics import trace
 from .streaming import CompletionStream, StreamError, sse_data
 
 

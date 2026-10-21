@@ -12,12 +12,12 @@ import httpx
 from fixtures import postmatch_payload, turn_payload
 from model_rps.cli import make_parser, play
 from model_rps.config import RuntimeConfig, load_config
-from model_rps.diagnostics import LogError, request_trace
-from model_rps.game import EndReason, GameState
-from model_rps.logs import RunLogs
-from model_rps.players import ChatCompletionPlayer, OPENAI, DEEPSEEK, PlayerError, ScriptedPlayer
-from model_rps.runner import RequestPolicy, run_game
-from model_rps.postmatch import run_postmatch
+from model_rps.core.diagnostics import LogError, request_trace
+from model_rps.core.game import EndReason, GameState
+from model_rps.core.logs import RunLogs
+from model_rps.players.base import ChatCompletionPlayer, OPENAI, DEEPSEEK, PlayerError, ScriptedPlayer
+from model_rps.engine.runner import RequestPolicy, run_game
+from model_rps.engine.postmatch import run_postmatch
 
 
 def decision(move='Paper', summary='PRIVATE-ANALYSIS'):
@@ -68,7 +68,7 @@ def response(parts, status=200):
 
 class StreamingTests(unittest.IsolatedAsyncioTestCase):
     async def test_sse_reader_closes_before_response_returns_at_done_marker(self):
-        from model_rps.streaming import sse_data
+        from model_rps.llm.streaming import sse_data
 
         closed = []
 
@@ -80,7 +80,7 @@ class StreamingTests(unittest.IsolatedAsyncioTestCase):
                 closed.append(True)
 
         async with httpx.AsyncClient(transport=httpx.MockTransport(lambda request: response(complete(decision())))) as client:
-            with patch('model_rps.transport.sse_data', tracked):
+            with patch('model_rps.llm.transport.sse_data', tracked):
                 player = ChatCompletionPlayer(client, OPENAI, 'test-key', stream=True)
                 await player.respond(GameState().view_for('A'))
                 self.assertEqual(closed, [True])

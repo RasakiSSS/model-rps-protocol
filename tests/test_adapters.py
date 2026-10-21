@@ -12,14 +12,14 @@ from unittest.mock import patch
 import httpx
 
 from fixtures import postmatch_payload, turn_payload
-from model_rps.adapters import MODEL_ADAPTERS, THINKING_MODES, configure_thinking, endpoint, request_payload
+from model_rps.llm.adapters import MODEL_ADAPTERS, THINKING_MODES, configure_thinking, endpoint, request_payload
 from model_rps.cli import main, make_parser
 from model_rps.config import RuntimeConfig, load_config
-from model_rps.diagnostics import request_trace
-from model_rps.game import GameState
+from model_rps.core.diagnostics import request_trace
+from model_rps.core.game import GameState
 from model_rps.player_factory import player_keys
-from model_rps.players import ChatCompletionPlayer, PlayerError
-from model_rps.requests import RequestPolicy, TurnFailed, request_interaction
+from model_rps.players.base import ChatCompletionPlayer, PlayerError
+from model_rps.engine.requests import RequestPolicy, TurnFailed, request_interaction
 
 
 def native_response(content, *, stop='end_turn'):

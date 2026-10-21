@@ -7,14 +7,14 @@ import unittest
 
 from fixtures import turn_payload
 from model_rps.cli import make_parser
-from model_rps.commands import AnalysisPolicy
+from model_rps.core.commands import AnalysisPolicy
 from model_rps.config import RuntimeConfig, load_config
-from model_rps.game import GameState, Gesture, InvalidResponse, MovePolicy
-from model_rps.human import HumanPlayer
+from model_rps.core.game import GameState, Gesture, InvalidResponse, MovePolicy
+from model_rps.players.human import HumanPlayer
 from model_rps.player_factory import load_keys, player_keys
-from model_rps.players import ScriptedPlayer
-from model_rps.postmatch import run_postmatch
-from model_rps.runner import RequestPolicy, run_game
+from model_rps.players.base import ScriptedPlayer
+from model_rps.engine.postmatch import run_postmatch
+from model_rps.engine.runner import RequestPolicy, run_game
 
 
 async def until(predicate):

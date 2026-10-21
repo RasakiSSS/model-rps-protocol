@@ -3,8 +3,8 @@
 import asyncio
 from dataclasses import dataclass, replace
 
-from .commands import Interaction
-from .game import ActionKind, Event, GameState, Initiative, InvalidResponse, PlayerView, abort, advance, advance_turn, ignored_move
+from ..core.commands import Interaction
+from ..core.game import ActionKind, Event, GameState, Initiative, InvalidResponse, PlayerView, abort, advance, advance_turn, ignored_move
 from .requests import RequestPolicy, TurnFailed, request_interaction
 
 

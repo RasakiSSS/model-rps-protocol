@@ -4,10 +4,10 @@ import unittest
 import httpx
 
 from fixtures import turn_payload
-from model_rps.game import MovePolicy, EndReason
-from model_rps.match import MatchConfig, MatchStatus, run_match
-from model_rps.players import ChatCompletionPlayer, DEEPSEEK, OPENAI, PlayerError, ScriptedPlayer, WAIT_RESPONSE
-from model_rps.runner import RequestPolicy
+from model_rps.core.game import MovePolicy, EndReason
+from model_rps.engine.match import MatchConfig, MatchStatus, run_match
+from model_rps.players.base import ChatCompletionPlayer, DEEPSEEK, OPENAI, PlayerError, ScriptedPlayer, WAIT_RESPONSE
+from model_rps.engine.runner import RequestPolicy
 
 FAST = RequestPolicy(timeout=1, retry_delay=0)
 

@@ -11,7 +11,7 @@ import httpx
 from fixtures import postmatch_payload, turn_payload
 from model_rps.cli import main, make_parser
 from model_rps.config import RuntimeConfig, load_config
-from model_rps.human import HumanPlayer
+from model_rps.players.human import HumanPlayer
 from model_rps.player_factory import model_players, player_keys
 
 

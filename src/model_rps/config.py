@@ -9,8 +9,8 @@ import tomllib
 import unicodedata
 from urllib.parse import urlsplit
 
-from .adapters import THINKING_MODES, MODEL_ADAPTERS
-from .commands import AnalysisPolicy
+from .llm.adapters import THINKING_MODES, MODEL_ADAPTERS
+from .core.commands import AnalysisPolicy
 
 
 CONFIG_PATH = Path("config.toml")

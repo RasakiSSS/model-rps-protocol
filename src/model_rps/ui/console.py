@@ -2,8 +2,8 @@
 
 import unicodedata
 
-from .game import EndReason, Event, GameState, MAX_TICKS
-from .logs import RunLogs
+from ..core.game import EndReason, Event, GameState, MAX_TICKS
+from ..core.logs import RunLogs
 from .terminal import color_names, supports_color
 
 GESTURE_NAMES = {"Rock": "石头", "Paper": "布", "Scissors": "剪刀"}

@@ -12,13 +12,13 @@ import httpx
 
 from fixtures import postmatch_payload, turn_payload
 from model_rps.cli import main
-from model_rps.diagnostics import LogError
-from model_rps.game import MovePolicy, GameState, InvalidResponse
-from model_rps.match import MatchConfig, MatchResult, MatchStatus
-from model_rps.players import ChatCompletionPlayer, DEEPSEEK, OPENAI, PlayerError
-from model_rps.commands import parse_postmatch
-from model_rps.postmatch import MatchArchive, run_postmatch
-from model_rps.runner import RequestPolicy
+from model_rps.core.diagnostics import LogError
+from model_rps.core.game import MovePolicy, GameState, InvalidResponse
+from model_rps.engine.match import MatchConfig, MatchResult, MatchStatus
+from model_rps.players.base import ChatCompletionPlayer, DEEPSEEK, OPENAI, PlayerError
+from model_rps.core.commands import parse_postmatch
+from model_rps.engine.postmatch import MatchArchive, run_postmatch
+from model_rps.engine.runner import RequestPolicy
 
 VALID = json.dumps(postmatch_payload("\n\n".join(["整体评价", "第一局结算刻改拳", "改善出拳分布"])))
 REPORT = {"result": {"status": "won", "wins": {"A": 2, "B": 0}}, "games": []}
@@ -216,7 +216,7 @@ class AsyncPostmatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(b.requests), 1)
 
     async def test_human_new_say_wakes_silent_model_without_operator_command(self):
-        from model_rps.human import HumanPlayer
+        from model_rps.players.human import HumanPlayer
         from test_human import until
 
         human = HumanPlayer()

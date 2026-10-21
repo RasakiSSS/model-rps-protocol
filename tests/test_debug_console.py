@@ -9,12 +9,12 @@ import unittest
 from unittest.mock import patch
 
 from model_rps.cli import main
-from model_rps.console import Console
-from model_rps.debug_console import LogTail, ParentProcess, format_record, open_debug_window, watch
-from model_rps.game import Event
-from model_rps.identities import player_names
-from model_rps.logs import RunLogs
-from model_rps.terminal import supports_color
+from model_rps.ui.console import Console
+from model_rps.ui.debug_console import LogTail, ParentProcess, format_record, open_debug_window, watch
+from model_rps.core.game import Event
+from model_rps.core.identities import player_names
+from model_rps.core.logs import RunLogs
+from model_rps.ui.terminal import supports_color
 
 
 class DebugConsoleTests(unittest.TestCase):
@@ -28,7 +28,7 @@ class DebugConsoleTests(unittest.TestCase):
             for seat in ('red', 'blue'):
                 (Path(directory) / seat).mkdir()
                 (Path(directory) / seat / 'debug.log').write_text('', encoding='utf-8')
-            with patch('model_rps.debug_console.ParentProcess') as parent, contextlib.redirect_stdout(io.StringIO()) as out:
+            with patch('model_rps.ui.debug_console.ParentProcess') as parent, contextlib.redirect_stdout(io.StringIO()) as out:
                 parent.return_value.alive.return_value = False
                 watch(Path(directory), parent=123)
                 parent.return_value.close.assert_called_once()
@@ -49,8 +49,8 @@ class DebugConsoleTests(unittest.TestCase):
 
     def test_window_launch_uses_argument_list_and_only_log_path_no_credentials(self):
         with tempfile.TemporaryDirectory() as directory, RunLogs(Path(directory), secrets=('do-not-pass',)) as logs:
-            with patch('model_rps.debug_console.sys.platform', 'win32'), patch('model_rps.debug_console.subprocess.Popen') as popen:
-                with patch('model_rps.debug_console.subprocess.CREATE_NEW_CONSOLE', 16, create=True):
+            with patch('model_rps.ui.debug_console.sys.platform', 'win32'), patch('model_rps.ui.debug_console.subprocess.Popen') as popen:
+                with patch('model_rps.ui.debug_console.subprocess.CREATE_NEW_CONSOLE', 16, create=True):
                     self.assertIs(open_debug_window(logs), popen.return_value)
                 args, kwargs = popen.call_args
                 self.assertIn(str(logs.path.resolve()), args[0])
@@ -58,9 +58,9 @@ class DebugConsoleTests(unittest.TestCase):
                 self.assertNotIn('do-not-pass', repr(popen.call_args))
                 self.assertFalse(kwargs.get('shell', False))
                 self.assertEqual(kwargs['creationflags'], 16)
-            with patch('model_rps.debug_console.subprocess.Popen', side_effect=OSError('sensitive detail')), \
-                    patch('model_rps.debug_console.sys.platform', 'win32'), contextlib.redirect_stderr(io.StringIO()) as out:
-                with patch('model_rps.debug_console.subprocess.CREATE_NEW_CONSOLE', 16, create=True):
+            with patch('model_rps.ui.debug_console.subprocess.Popen', side_effect=OSError('sensitive detail')), \
+                    patch('model_rps.ui.debug_console.sys.platform', 'win32'), contextlib.redirect_stderr(io.StringIO()) as out:
+                with patch('model_rps.ui.debug_console.subprocess.CREATE_NEW_CONSOLE', 16, create=True):
                     self.assertIsNone(open_debug_window(logs))
                 self.assertNotIn('sensitive detail', out.getvalue())
                 self.assertIn('比赛继续', out.getvalue())

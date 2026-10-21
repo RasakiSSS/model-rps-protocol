@@ -4,7 +4,7 @@ import json
 
 import httpx
 
-from .diagnostics import trace
+from ..core.diagnostics import trace
 
 
 class StreamError(ValueError):

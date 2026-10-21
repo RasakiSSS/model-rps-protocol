@@ -13,10 +13,10 @@ from prompt_toolkit import PromptSession
 from prompt_toolkit.input import create_pipe_input
 from prompt_toolkit.output import DummyOutput
 
-from model_rps.console import Console
-from model_rps.game import InvalidResponse
-from model_rps.human_terminal import HumanTerminal
-from model_rps.match import MatchConfig
+from model_rps.ui.console import Console
+from model_rps.core.game import InvalidResponse
+from model_rps.ui.human_terminal import HumanTerminal
+from model_rps.engine.match import MatchConfig
 from model_rps.mcp_agent.server import create_server
 from model_rps.room.remote import RemoteRoom, RoomConnector
 from model_rps.room.client import RemoteHumanPlayer, result_exit_code

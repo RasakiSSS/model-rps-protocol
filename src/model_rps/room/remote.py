@@ -7,8 +7,8 @@ from uuid import uuid4
 import httpx
 
 from ..config import text_value
-from ..game import InvalidResponse
-from ..match import MatchConfig
+from ..core.game import InvalidResponse
+from ..engine.match import MatchConfig
 
 
 class RemoteRoom:

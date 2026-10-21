@@ -11,8 +11,8 @@ import httpx
 
 from fixtures import postmatch_payload, turn_payload
 from model_rps.cli import make_parser, play
-from model_rps.identities import SEAT_DIRECTORIES, named_data, player_names
-from model_rps.logs import RunLogs
+from model_rps.core.identities import SEAT_DIRECTORIES, named_data, player_names
+from model_rps.core.logs import RunLogs
 
 
 class IdentityTests(unittest.TestCase):

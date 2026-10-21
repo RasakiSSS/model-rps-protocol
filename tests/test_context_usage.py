@@ -4,10 +4,10 @@ import unittest
 import httpx
 
 from fixtures import postmatch_payload, turn_payload
-from model_rps.context_usage import ContextUsage
-from model_rps.diagnostics import request_trace
-from model_rps.game import GameState
-from model_rps.players import ChatCompletionPlayer, OPENAI, PlayerError
+from model_rps.players.context_usage import ContextUsage
+from model_rps.core.diagnostics import request_trace
+from model_rps.core.game import GameState
+from model_rps.players.base import ChatCompletionPlayer, OPENAI, PlayerError
 
 
 class ContextUsageTests(unittest.TestCase):

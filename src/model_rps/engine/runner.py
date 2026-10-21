@@ -1,6 +1,6 @@
 """单局入口；请求策略与事件调度分别由 requests、scheduler 负责。"""
 
-from .game import GameState, Initiative, MovePolicy
+from ..core.game import GameState, Initiative, MovePolicy
 from .requests import MAX_ATTEMPTS, RequestPolicy
 from .scheduler import GameSession
 

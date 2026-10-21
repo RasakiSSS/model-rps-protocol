@@ -4,8 +4,8 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Callable
 
-from .game import EndReason, Event, GameState, Initiative, MovePolicy, PlayerId
-from .players import MatchPlayer
+from ..core.game import EndReason, Event, GameState, Initiative, MovePolicy, PlayerId
+from ..players.base import MatchPlayer
 from .runner import RequestPolicy, run_game
 
 

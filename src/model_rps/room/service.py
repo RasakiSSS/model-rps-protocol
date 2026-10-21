@@ -2,7 +2,7 @@
 
 import asyncio
 
-from ..game import InvalidResponse
+from ..core.game import InvalidResponse
 from .shared import SharedRoom
 
 

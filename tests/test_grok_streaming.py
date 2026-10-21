@@ -7,14 +7,14 @@ import unittest
 import httpx
 
 from fixtures import postmatch_payload, turn_payload
-from model_rps.adapters import MODEL_ADAPTERS
-from model_rps.game import GameState
-from model_rps.match import MatchConfig, run_match
-from model_rps.players import ChatCompletionPlayer, ScriptedPlayer
-from model_rps.postmatch import MatchArchive, _request, run_postmatch
-from model_rps.prompts import GROK_STREAM_FORMAT_PROMPT, game_prompt
-from model_rps.requests import RequestPolicy, TurnFailed, request_interaction
-from model_rps.seats import Replacement, SeatPlayer
+from model_rps.llm.adapters import MODEL_ADAPTERS
+from model_rps.core.game import GameState
+from model_rps.engine.match import MatchConfig, run_match
+from model_rps.players.base import ChatCompletionPlayer, ScriptedPlayer
+from model_rps.engine.postmatch import MatchArchive, _request, run_postmatch
+from model_rps.core.prompts import GROK_STREAM_FORMAT_PROMPT, game_prompt
+from model_rps.engine.requests import RequestPolicy, TurnFailed, request_interaction
+from model_rps.players.seats import Replacement, SeatPlayer
 from test_adapters import BytesStream, native_events, native_response
 from test_streaming import complete, response
 

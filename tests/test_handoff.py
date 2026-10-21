@@ -5,15 +5,15 @@ import unittest
 import httpx
 
 from fixtures import turn_payload, postmatch_payload
-from model_rps.game import EndReason, Event, GameState, Gesture, Initiative, InvalidResponse, MovePolicy
-from model_rps.human import HumanPlayer
-from model_rps.identities import named_data
-from model_rps.match import MatchConfig, run_match
-from model_rps.players import ChatCompletionPlayer, OPENAI, ScriptedPlayer, PlayerError
-from model_rps.postmatch import MatchArchive, run_postmatch
-from model_rps.requests import RequestPolicy
-from model_rps.scheduler import GameSession
-from model_rps.seats import Replacement, SeatPlayer
+from model_rps.core.game import EndReason, Event, GameState, Gesture, Initiative, InvalidResponse, MovePolicy
+from model_rps.players.human import HumanPlayer
+from model_rps.core.identities import named_data
+from model_rps.engine.match import MatchConfig, run_match
+from model_rps.players.base import ChatCompletionPlayer, OPENAI, ScriptedPlayer, PlayerError
+from model_rps.engine.postmatch import MatchArchive, run_postmatch
+from model_rps.engine.requests import RequestPolicy
+from model_rps.engine.scheduler import GameSession
+from model_rps.players.seats import Replacement, SeatPlayer
 from test_human import until
 
 

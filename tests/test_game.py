@@ -2,8 +2,8 @@ import json
 import unittest
 
 from fixtures import turn_payload
-from model_rps.commands import parse_response
-from model_rps.game import (
+from model_rps.core.commands import parse_response
+from model_rps.core.game import (
     MovePolicy,
     Action, ActionKind, EndReason, GameState, Gesture, InvalidResponse,
     advance, judge,
@@ -172,7 +172,7 @@ class GameTests(unittest.TestCase):
 
 class ResponseTests(unittest.TestCase):
     def test_analyze_is_required_and_private(self):
-        from model_rps.commands import parse_decision
+        from model_rps.core.commands import parse_decision
 
         for summary in (None, "", "  ", 1, []):
             with self.subTest(summary=summary), self.assertRaises(InvalidResponse):

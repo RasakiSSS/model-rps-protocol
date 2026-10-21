@@ -8,7 +8,7 @@ from prompt_toolkit.application import create_app_session, run_in_terminal
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.output import create_output
 
-from .game import InvalidResponse
+from ..core.game import InvalidResponse
 
 
 class UserInterrupted(Exception):

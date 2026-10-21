@@ -11,15 +11,15 @@ from unittest.mock import patch
 import httpx
 
 from fixtures import turn_payload
-from model_rps.debug_console import format_record, watch
-from model_rps.game import GameState, MovePolicy
-from model_rps.identities import player_names
-from model_rps.logs import RunLogs
-from model_rps.players import ChatCompletionPlayer, OPENAI, ScriptedPlayer, PlayerError
-from model_rps.postmatch import _request, PostmatchFailed
-from model_rps.requests import RequestPolicy, request_interaction
-from model_rps.scheduler import GameSession
-from model_rps.seats import SeatPlayer
+from model_rps.ui.debug_console import format_record, watch
+from model_rps.core.game import GameState, MovePolicy
+from model_rps.core.identities import player_names
+from model_rps.core.logs import RunLogs
+from model_rps.players.base import ChatCompletionPlayer, OPENAI, ScriptedPlayer, PlayerError
+from model_rps.engine.postmatch import _request, PostmatchFailed
+from model_rps.engine.requests import RequestPolicy, request_interaction
+from model_rps.engine.scheduler import GameSession
+from model_rps.players.seats import SeatPlayer
 from test_human import until
 
 
@@ -34,7 +34,7 @@ class DebugDetailTests(unittest.TestCase):
     def test_shared_log_order_survives_equal_timestamps_and_large_records(self):
         with tempfile.TemporaryDirectory() as directory:
             with RunLogs(Path(directory), names=player_names('same', 'same')) as logs:
-                with patch('model_rps.logs.datetime') as clock:
+                with patch('model_rps.core.logs.datetime') as clock:
                     clock.now.return_value = datetime(2026, 10, 18, 12)
                     logs.lifecycle('match_start', players=logs.names)
                     logs.request(1, {'kind': 'http_request', 'player': 'A', 'payload': 'x' * 150000})
@@ -133,7 +133,7 @@ class DebugDetailTests(unittest.TestCase):
                                 'tick': 2, 'request_id': 1, 'applied_tick': 2, 'outcomes': ['commit'], 'own_move': 'Rock'})
                 logs.request(1, {'kind': 'chat_validated', 'player': 'A', 'actor': 'Red · 新模型',
                                 'tick': 2, 'request_id': 3, 'message_count': 0, 'messages': []})
-            with patch('model_rps.debug_console.supports_color', return_value=True), \
+            with patch('model_rps.ui.debug_console.supports_color', return_value=True), \
                     contextlib.redirect_stdout(io.StringIO()) as output:
                 watch(logs.path, once=True)
             text = output.getvalue()

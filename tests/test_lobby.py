@@ -15,8 +15,8 @@ from prompt_toolkit.output import DummyOutput
 from fixtures import postmatch_payload, turn_payload
 from model_rps.cli import main, make_parser, play, validate_setup
 from model_rps.config import RuntimeConfig
-from model_rps.human_terminal import HumanTerminal, UserInterrupted
-from model_rps.lobby import choose_next_match, select_profile, swap_seats
+from model_rps.ui.human_terminal import HumanTerminal, UserInterrupted
+from model_rps.ui.lobby import choose_next_match, select_profile, swap_seats
 from test_human import until
 from test_human_terminal import AutoTerminal
 
@@ -82,7 +82,7 @@ class LobbyPromptTests(unittest.IsolatedAsyncioTestCase):
             '/profiles', '/status', '/help', '/blue second', '/start']
         before = vars(args).copy()
         with patch('sys.stdin.isatty', return_value=True), patch('sys.stdout.isatty', return_value=True), \
-                patch('model_rps.lobby.supports_color', return_value=False), \
+                patch('model_rps.ui.lobby.supports_color', return_value=False), \
                 patch('model_rps.cli.httpx.AsyncClient') as network:
             selected, settings = await choose_next_match(args, validate=validate_setup, session=prompt, output=lines.append)
         network.assert_not_called()
@@ -158,8 +158,8 @@ class LobbyPromptTests(unittest.IsolatedAsyncioTestCase):
                                 'red': {'profile': 'human'}, 'blue': {'profile': 'bot'}}).parse_args(
                                     ['--mode', 'demo', '--session', '--log-dir', directory])
             with patch('model_rps.cli.HumanTerminal', side_effect=human_terminal), \
-                    patch('model_rps.lobby.PromptSession', side_effect=lobby_session), \
-                    patch('model_rps.lobby.create_output', return_value=DummyOutput()), \
+                    patch('model_rps.ui.lobby.PromptSession', side_effect=lobby_session), \
+                    patch('model_rps.ui.lobby.create_output', return_value=DummyOutput()), \
                     patch('sys.stdin.isatty', return_value=True), contextlib.redirect_stdout(io.StringIO()) as out, \
                     patch('sys.stdout.isatty', return_value=True):
                 task = asyncio.create_task(play(args))
@@ -295,8 +295,8 @@ profile="first"
 
             with patch('model_rps.cli.httpx.AsyncClient', side_effect=make_client), \
                     patch('model_rps.cli.open_debug_window') as debug, \
-                    patch('model_rps.lobby.PromptSession', return_value=Keyboard()), \
-                    patch('model_rps.lobby.create_output', return_value=DummyOutput()), \
+                    patch('model_rps.ui.lobby.PromptSession', return_value=Keyboard()), \
+                    patch('model_rps.ui.lobby.create_output', return_value=DummyOutput()), \
                     patch('sys.stdin.isatty', return_value=True), contextlib.redirect_stdout(io.StringIO()) as out, \
                     patch('sys.stdout.isatty', return_value=True):
                 status = main(['--config', str(config), '--log-dir', str(root / 'logs'), '--session', '--debug'])
@@ -353,8 +353,8 @@ profile="bot"
                     return AutoTerminal(player, identity, console)
 
                 with patch('model_rps.cli.HumanTerminal', side_effect=terminal), \
-                        patch('model_rps.lobby.PromptSession', return_value=prompt), \
-                        patch('model_rps.lobby.create_output', return_value=DummyOutput()), \
+                        patch('model_rps.ui.lobby.PromptSession', return_value=prompt), \
+                        patch('model_rps.ui.lobby.create_output', return_value=DummyOutput()), \
                         patch('model_rps.cli.httpx.AsyncClient') as network, \
                         patch('sys.stdin.isatty', return_value=True), contextlib.redirect_stdout(io.StringIO()), \
                         patch('sys.stdout.isatty', return_value=True):

@@ -5,10 +5,10 @@ import json
 from dataclasses import replace
 from uuid import uuid4
 
-from .commands import parse_interaction, parse_postmatch
-from .game import InvalidResponse, validate_turn
+from ..core.commands import parse_interaction, parse_postmatch
+from ..core.game import InvalidResponse, validate_turn
 from .human import HumanPlayer
-from .players import PlayerInput
+from .base import PlayerInput
 
 
 class ExternalPlayer(HumanPlayer):

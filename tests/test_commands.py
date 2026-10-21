@@ -10,10 +10,10 @@ import httpx
 
 from fixtures import complete_public_report, turn_payload, postmatch_payload
 from model_rps.cli import main, make_parser
-from model_rps.commands import (AnalysisPolicy, CommandKind, parse_commands, parse_command_line,
+from model_rps.core.commands import (AnalysisPolicy, CommandKind, parse_commands, parse_command_line,
                                 parse_decision, validate_decision, parse_postmatch)
 from model_rps.config import RuntimeConfig, load_config
-from model_rps.game import ActionKind, InvalidResponse
+from model_rps.core.game import ActionKind, InvalidResponse
 
 
 class CommandTests(unittest.TestCase):

@@ -5,7 +5,7 @@ import argparse
 from prompt_toolkit import PromptSession
 from prompt_toolkit.output import create_output
 
-from .adapters import MODEL_ADAPTERS
+from ..llm.adapters import MODEL_ADAPTERS
 from .console import display_text
 from .human_terminal import UserInterrupted
 from .terminal import color_names, supports_color

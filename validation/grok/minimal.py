@@ -14,8 +14,8 @@ import tomllib
 
 import httpx
 
-from model_rps.adapters import MODEL_ADAPTERS, auth_headers, configure_thinking, endpoint, request_payload
-from model_rps.streaming import CompletionStream, sse_data
+from model_rps.llm.adapters import MODEL_ADAPTERS, auth_headers, configure_thinking, endpoint, request_payload
+from model_rps.llm.streaming import CompletionStream, sse_data
 
 
 TARGETS = {

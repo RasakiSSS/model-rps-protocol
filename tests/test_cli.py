@@ -11,8 +11,8 @@ from unittest.mock import patch
 import httpx
 
 from model_rps.cli import Console, display_text, load_keys, main
-from model_rps.game import EndReason, Event, GameState, Gesture, Result
-from model_rps.logs import RunLogs
+from model_rps.core.game import EndReason, Event, GameState, Gesture, Result
+from model_rps.core.logs import RunLogs
 
 
 class CliTests(unittest.TestCase):

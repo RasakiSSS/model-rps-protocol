@@ -9,12 +9,12 @@ from unittest.mock import patch
 import httpx
 
 from fixtures import postmatch_payload, turn_payload
-from model_rps.commands import parse_response
+from model_rps.core.commands import parse_response
 from model_rps.cli import main, make_parser
-from model_rps.game import Action, ActionKind, EndReason, GameState, Gesture, InvalidResponse, MovePolicy, advance, judge
-from model_rps.match import MatchConfig, run_match
-from model_rps.players import ChatCompletionPlayer, DEEPSEEK, OPENAI, ScriptedPlayer, WAIT_RESPONSE, game_prompt
-from model_rps.runner import RequestPolicy, run_game
+from model_rps.core.game import Action, ActionKind, EndReason, GameState, Gesture, InvalidResponse, MovePolicy, advance, judge
+from model_rps.engine.match import MatchConfig, run_match
+from model_rps.players.base import ChatCompletionPlayer, DEEPSEEK, OPENAI, ScriptedPlayer, WAIT_RESPONSE, game_prompt
+from model_rps.engine.runner import RequestPolicy, run_game
 
 FAST = RequestPolicy(timeout=1, retry_delay=0)
 WAIT = parse_response(WAIT_RESPONSE)

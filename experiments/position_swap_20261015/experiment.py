@@ -12,10 +12,10 @@ from time import perf_counter
 import httpx
 
 from model_rps.cli import load_keys
-from model_rps.diagnostics import request_trace
-from model_rps.game import parse_decision
-from model_rps.logs import RunLogs
-from model_rps.players import ChatCompletionPlayer, DEEPSEEK, OPENAI, PlayerError, configure_thinking
+from model_rps.core.diagnostics import request_trace
+from model_rps.core.game import parse_decision
+from model_rps.core.logs import RunLogs
+from model_rps.players.base import ChatCompletionPlayer, DEEPSEEK, OPENAI, PlayerError, configure_thinking
 
 ROOT = Path(__file__).resolve().parents[2] / 'logs' / 'experiments' / 'position_swap_20261015'
 SOURCE = Path('logs/20261015_014708_111317_5bbf4e82')

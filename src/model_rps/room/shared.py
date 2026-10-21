@@ -7,8 +7,8 @@ from time import monotonic
 from uuid import uuid4
 
 from ..config import text_value
-from ..external_player import ExternalPlayer
-from ..game import InvalidResponse
+from ..players.external import ExternalPlayer
+from ..core.game import InvalidResponse
 from .base import Room
 
 

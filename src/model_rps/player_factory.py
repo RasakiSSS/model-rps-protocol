@@ -5,9 +5,9 @@ from dataclasses import replace
 from pathlib import Path
 
 from .config import RuntimeConfig
-from .players import ChatCompletionPlayer
-from .adapters import MODEL_ADAPTERS, configure_thinking
-from .human import HumanPlayer
+from .players.base import ChatCompletionPlayer
+from .llm.adapters import MODEL_ADAPTERS, configure_thinking
+from .players.human import HumanPlayer
 
 
 def load_keys(path: Path, *, required=("openai", "deepseek")) -> tuple[str | None, str | None]:

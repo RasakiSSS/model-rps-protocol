@@ -7,16 +7,16 @@ import math
 from pathlib import Path
 import sys
 
-from ..commands import AnalysisPolicy
-from ..console import Console, display_text
-from ..game import InvalidResponse
-from ..identities import named_data
-from ..logs import RunLogs
-from ..match import MatchConfig, MatchStatus, run_match
-from ..external_player import ExternalPlayer
-from ..postmatch import MatchArchive, run_postmatch
-from ..runner import RequestPolicy
-from ..seats import SeatPlayer
+from ..core.commands import AnalysisPolicy
+from ..ui.console import Console, display_text
+from ..core.game import InvalidResponse
+from ..core.identities import named_data
+from ..core.logs import RunLogs
+from ..engine.match import MatchConfig, MatchStatus, run_match
+from ..players.external import ExternalPlayer
+from ..engine.postmatch import MatchArchive, run_postmatch
+from ..engine.runner import RequestPolicy
+from ..players.seats import SeatPlayer
 
 
 class Room:

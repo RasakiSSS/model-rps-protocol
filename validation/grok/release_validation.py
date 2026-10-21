@@ -11,15 +11,15 @@ import tomllib
 
 import httpx
 
-from model_rps.adapters import MODEL_ADAPTERS, configure_thinking
-from model_rps.game import Initiative
-from model_rps.identities import player_names
-from model_rps.logs import RunLogs
-from model_rps.match import MatchConfig, MatchStatus, run_match
-from model_rps.players import ChatCompletionPlayer, ScriptedPlayer
-from model_rps.postmatch import MatchArchive, run_postmatch
-from model_rps.prompts import GROK_STREAM_FORMAT_PROMPT
-from model_rps.requests import RequestPolicy
+from model_rps.llm.adapters import MODEL_ADAPTERS, configure_thinking
+from model_rps.core.game import Initiative
+from model_rps.core.identities import player_names
+from model_rps.core.logs import RunLogs
+from model_rps.engine.match import MatchConfig, MatchStatus, run_match
+from model_rps.players.base import ChatCompletionPlayer, ScriptedPlayer
+from model_rps.engine.postmatch import MatchArchive, run_postmatch
+from model_rps.core.prompts import GROK_STREAM_FORMAT_PROMPT
+from model_rps.engine.requests import RequestPolicy
 
 
 async def main():

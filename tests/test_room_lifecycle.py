@@ -10,8 +10,8 @@ from prompt_toolkit import PromptSession
 from prompt_toolkit.input import create_pipe_input
 from prompt_toolkit.output import DummyOutput
 
-from model_rps.game import InvalidResponse
-from model_rps.match import MatchConfig
+from model_rps.core.game import InvalidResponse
+from model_rps.engine.match import MatchConfig
 from model_rps.room.remote import RemoteRoom
 from model_rps.room.terminal import RoomTerminal
 from test_shared_room import SharedRoomFixtures, action, until

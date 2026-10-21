@@ -14,14 +14,14 @@ from prompt_toolkit.output import DummyOutput
 
 from fixtures import postmatch_payload, turn_payload
 from model_rps.cli import main
-from model_rps.console import Console
-from model_rps.game import GameState, InvalidResponse
-from model_rps.human import HumanPlayer
-from model_rps.human_terminal import HumanTerminal
-from model_rps.players import ScriptedPlayer
-from model_rps.requests import RequestPolicy
-from model_rps.scheduler import GameSession
-from model_rps.seats import Replacement, SeatPlayer
+from model_rps.ui.console import Console
+from model_rps.core.game import GameState, InvalidResponse
+from model_rps.players.human import HumanPlayer
+from model_rps.ui.human_terminal import HumanTerminal
+from model_rps.players.base import ScriptedPlayer
+from model_rps.engine.requests import RequestPolicy
+from model_rps.engine.scheduler import GameSession
+from model_rps.players.seats import Replacement, SeatPlayer
 from test_human import until
 
 

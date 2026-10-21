@@ -4,10 +4,10 @@ from dataclasses import replace
 
 import httpx
 
-from model_rps.commands import parse_response
-from model_rps.game import MovePolicy, EndReason, GameState, advance
-from model_rps.players import ChatCompletionPlayer, DEEPSEEK, OPENAI, PlayerError, WAIT_RESPONSE
-from model_rps.runner import RequestPolicy, run_game
+from model_rps.core.commands import parse_response
+from model_rps.core.game import MovePolicy, EndReason, GameState, advance
+from model_rps.players.base import ChatCompletionPlayer, DEEPSEEK, OPENAI, PlayerError, WAIT_RESPONSE
+from model_rps.engine.runner import RequestPolicy, run_game
 
 ROCK = '{"actions":[{"type":"ANALYZE","text":"测试决策说明"},{"type":"MOVE","move":"Rock"},{"type":"ENDTURN"}]}'
 SCISSORS = '{"actions":[{"type":"ANALYZE","text":"测试决策说明"},{"type":"MOVE","move":"Scissors"},{"type":"ENDTURN"}]}'

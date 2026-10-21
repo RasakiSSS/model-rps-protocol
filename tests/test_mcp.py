@@ -10,12 +10,12 @@ import unittest
 from unittest.mock import patch
 
 from fixtures import turn_payload
-from model_rps.game import GameState, InvalidResponse
-from model_rps.match import MatchConfig
+from model_rps.core.game import GameState, InvalidResponse
+from model_rps.engine.match import MatchConfig
 from model_rps.mcp_agent.player import MCPPlayer
 from model_rps.mcp_agent.room import MCPRoom
 from model_rps.mcp_agent.server import create_server, make_room
-from model_rps.players import ScriptedPlayer
+from model_rps.players.base import ScriptedPlayer
 from model_rps.room.remote import RemoteRoom, RoomConnector
 
 if importlib.util.find_spec('mcp'):

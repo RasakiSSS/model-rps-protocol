@@ -13,13 +13,13 @@ import tomllib
 
 import httpx
 
-from model_rps.adapters import MODEL_ADAPTERS, auth_headers, configure_thinking, endpoint, request_payload
-from model_rps.commands import AnalysisPolicy, parse_interaction
-from model_rps.game import GameState, Initiative, MovePolicy
-from model_rps.history import ConversationHistory
-from model_rps.identities import named_data, player_names
-from model_rps.prompts import game_prompt
-from model_rps.streaming import CompletionStream, sse_data
+from model_rps.llm.adapters import MODEL_ADAPTERS, auth_headers, configure_thinking, endpoint, request_payload
+from model_rps.core.commands import AnalysisPolicy, parse_interaction
+from model_rps.core.game import GameState, Initiative, MovePolicy
+from model_rps.players.history import ConversationHistory
+from model_rps.core.identities import named_data, player_names
+from model_rps.core.prompts import game_prompt
+from model_rps.llm.streaming import CompletionStream, sse_data
 
 
 async def main():

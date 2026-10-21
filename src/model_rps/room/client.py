@@ -6,10 +6,10 @@ import os
 import sys
 from uuid import uuid4
 
-from ..commands import CommandKind, parse_command_line
-from ..console import Console, display_text
-from ..game import Event, InvalidResponse
-from ..human_terminal import HumanTerminal, UserInterrupted
+from ..core.commands import CommandKind, parse_command_line
+from ..ui.console import Console, display_text
+from ..core.game import Event, InvalidResponse
+from ..ui.human_terminal import HumanTerminal, UserInterrupted
 from .remote import RemoteRoom
 
 

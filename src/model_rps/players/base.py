@@ -11,16 +11,16 @@ from urllib.parse import urlsplit
 
 import httpx
 
-from .game import MAX_TICKS, PlayerView
-from .commands import AnalysisPolicy
+from ..core.game import MAX_TICKS, PlayerView
+from ..core.commands import AnalysisPolicy
 from .context_usage import ContextUsage
 from .history import ConversationHistory, HistoryCheckpoint
-from .diagnostics import trace
-from .identities import named_data
-from .prompts import GROK_STREAM_FORMAT_PROMPT, POSTMATCH_PROMPT, game_prompt
-from .adapters import (ModelSpec, MODEL_ADAPTERS, DEEPSEEK, OPENAI, configure_thinking,
+from ..core.diagnostics import trace
+from ..core.identities import named_data
+from ..core.prompts import GROK_STREAM_FORMAT_PROMPT, POSTMATCH_PROMPT, game_prompt
+from ..llm.adapters import (ModelSpec, MODEL_ADAPTERS, DEEPSEEK, OPENAI, configure_thinking,
                        DEEPSEEK_THINKING_MODES, OPENAI_THINKING_MODES)
-from .transport import ModelTransport, PlayerError
+from ..llm.transport import ModelTransport, PlayerError
 
 MAX_OUTPUT_TOKENS = 20000
 

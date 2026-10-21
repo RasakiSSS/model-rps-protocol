@@ -3,8 +3,8 @@
 from copy import deepcopy
 from dataclasses import dataclass
 
-from .game import ignored_move
-from .prompts import HANDOFF_PROMPT
+from ..core.game import ignored_move
+from ..core.prompts import HANDOFF_PROMPT
 
 
 @dataclass(frozen=True)

@@ -10,16 +10,16 @@ from typing import Any
 import httpx
 
 from ..cli import make_parser
-from ..commands import AnalysisPolicy
+from ..core.commands import AnalysisPolicy
 from ..config import CONFIG_PATH, RuntimeConfig, load_config, text_value
-from ..game import MAX_TICKS, InvalidResponse
-from ..match import MatchConfig
+from ..core.game import MAX_TICKS, InvalidResponse
+from ..engine.match import MatchConfig
 from .room import MCPRoom
 from ..player_factory import model_player, player_keys
-from ..players import demo_players
-from ..prompts import MCP_INSTRUCTIONS, MOVE_RULES
+from ..players.base import demo_players
+from ..core.prompts import MCP_INSTRUCTIONS, MOVE_RULES
 from ..room.remote import RemoteRoom, RoomConnector
-from ..runner import RequestPolicy
+from ..engine.runner import RequestPolicy
 
 
 def create_server(room):

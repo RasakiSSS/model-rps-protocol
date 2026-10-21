@@ -8,10 +8,10 @@ from time import perf_counter
 from dataclasses import dataclass
 from typing import Callable
 
-from .game import Event, InvalidResponse, PlayerView, ignored_move, validate_turn
-from .commands import AnalysisPolicy, Interaction, parse_interaction
-from .diagnostics import LogError, TraceHandler, request_trace, trace
-from .players import ModelResponse, Player, PlayerError
+from ..core.game import Event, InvalidResponse, PlayerView, ignored_move, validate_turn
+from ..core.commands import AnalysisPolicy, Interaction, parse_interaction
+from ..core.diagnostics import LogError, TraceHandler, request_trace, trace
+from ..players.base import ModelResponse, Player, PlayerError
 
 MAX_ATTEMPTS = 3
 REQUEST_TIMEOUT_SECONDS = 60.0

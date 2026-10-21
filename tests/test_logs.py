@@ -11,11 +11,11 @@ import httpx
 
 from fixtures import turn_payload
 from model_rps.cli import Console, main
-from model_rps.diagnostics import LogError
-from model_rps.game import MovePolicy
-from model_rps.logs import RunLogs
-from model_rps.players import ChatCompletionPlayer, DEEPSEEK, OPENAI, ScriptedPlayer
-from model_rps.runner import RequestPolicy, run_game
+from model_rps.core.diagnostics import LogError
+from model_rps.core.game import MovePolicy
+from model_rps.core.logs import RunLogs
+from model_rps.players.base import ChatCompletionPlayer, DEEPSEEK, OPENAI, ScriptedPlayer
+from model_rps.engine.runner import RequestPolicy, run_game
 
 FAST = RequestPolicy(timeout=1, retry_delay=0)
 

@@ -2,7 +2,7 @@
 
 import json
 
-from .diagnostics import trace
+from ..core.diagnostics import trace
 from .streaming import StreamError
 
 

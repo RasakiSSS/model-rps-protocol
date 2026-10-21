@@ -6,11 +6,11 @@ import unittest
 import httpx
 
 from fixtures import complete_public_report, postmatch_payload, turn_payload
-from model_rps.game import Event, GameState
-from model_rps.match import MatchConfig, run_match
-from model_rps.players import ChatCompletionPlayer, OPENAI, PlayerError
-from model_rps.postmatch import MatchArchive, run_postmatch
-from model_rps.requests import RequestPolicy
+from model_rps.core.game import Event, GameState
+from model_rps.engine.match import MatchConfig, run_match
+from model_rps.players.base import ChatCompletionPlayer, OPENAI, PlayerError
+from model_rps.engine.postmatch import MatchArchive, run_postmatch
+from model_rps.engine.requests import RequestPolicy
 
 
 FAST = RequestPolicy(timeout=2, retry_delay=0)

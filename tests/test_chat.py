@@ -5,12 +5,12 @@ import unittest
 import httpx
 
 from fixtures import turn_payload, postmatch_payload
-from model_rps.commands import AnalysisPolicy, parse_interaction
-from model_rps.diagnostics import LogError
-from model_rps.game import EndReason, Gesture, InvalidResponse
-from model_rps.match import MatchConfig, run_match
-from model_rps.players import ChatCompletionPlayer, OPENAI, PlayerError, ScriptedPlayer, WAIT_RESPONSE
-from model_rps.runner import RequestPolicy, run_game
+from model_rps.core.commands import AnalysisPolicy, parse_interaction
+from model_rps.core.diagnostics import LogError
+from model_rps.core.game import EndReason, Gesture, InvalidResponse
+from model_rps.engine.match import MatchConfig, run_match
+from model_rps.players.base import ChatCompletionPlayer, OPENAI, PlayerError, ScriptedPlayer, WAIT_RESPONSE
+from model_rps.engine.runner import RequestPolicy, run_game
 
 
 FAST = RequestPolicy(2, 0)

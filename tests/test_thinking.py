@@ -11,16 +11,16 @@ from unittest.mock import patch
 import httpx
 
 from fixtures import postmatch_payload, turn_payload
-from model_rps.commands import parse_decision, AnalysisPolicy
+from model_rps.core.commands import parse_decision, AnalysisPolicy
 from model_rps.cli import make_parser, play
 from model_rps.config import RuntimeConfig
-from model_rps.diagnostics import LogError, request_trace
-from model_rps.game import EndReason, GameState, InvalidResponse, MovePolicy
-from model_rps.logs import RunLogs
-from model_rps.players import (ChatCompletionPlayer, DEEPSEEK, OPENAI, DEEPSEEK_THINKING_MODES,
+from model_rps.core.diagnostics import LogError, request_trace
+from model_rps.core.game import EndReason, GameState, InvalidResponse, MovePolicy
+from model_rps.core.logs import RunLogs
+from model_rps.players.base import (ChatCompletionPlayer, DEEPSEEK, OPENAI, DEEPSEEK_THINKING_MODES,
                                OPENAI_THINKING_MODES, PlayerError, ScriptedPlayer,
                                configure_thinking, game_prompt)
-from model_rps.runner import RequestPolicy, run_game
+from model_rps.engine.runner import RequestPolicy, run_game
 
 FAST = RequestPolicy(timeout=1, retry_delay=0)
 POSTMATCH = json.dumps(postmatch_payload("\n\n".join(["评价", "关键局", "改进"])))

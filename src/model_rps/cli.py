@@ -10,24 +10,24 @@ from pathlib import Path
 
 import httpx
 
-from .game import MovePolicy
-from .console import Console, display_text
-from .debug_console import open_debug_window
+from .core.game import MovePolicy
+from .ui.console import Console, display_text
+from .ui.debug_console import open_debug_window
 from .player_factory import load_keys, model_player, model_players, player_keys
-from .human import HumanPlayer
-from .human_terminal import HumanTerminal, UserInterrupted, wait_for_resume
+from .players.human import HumanPlayer
+from .ui.human_terminal import HumanTerminal, UserInterrupted, wait_for_resume
 from .config import CONFIG_PATH, RuntimeConfig, load_config, parser_defaults
-from .diagnostics import LogError
-from .logs import RunLogs
-from .identities import player_names
-from .match import MatchConfig, MatchStatus, run_match
-from .players import demo_players
-from .adapters import MODEL_ADAPTERS
-from .commands import AnalysisPolicy
-from .postmatch import MatchArchive, run_postmatch
-from .runner import RequestPolicy
-from .lobby import choose_next_match, select_profile
-from .seats import Replacement, SeatPlayer
+from .core.diagnostics import LogError
+from .core.logs import RunLogs
+from .core.identities import player_names
+from .engine.match import MatchConfig, MatchStatus, run_match
+from .players.base import demo_players
+from .llm.adapters import MODEL_ADAPTERS
+from .core.commands import AnalysisPolicy
+from .engine.postmatch import MatchArchive, run_postmatch
+from .engine.runner import RequestPolicy
+from .ui.lobby import choose_next_match, select_profile
+from .players.seats import Replacement, SeatPlayer
 
 
 def make_parser(config: dict | None = None) -> argparse.ArgumentParser:

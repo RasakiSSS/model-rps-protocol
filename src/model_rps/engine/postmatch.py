@@ -6,11 +6,11 @@ from copy import deepcopy
 from dataclasses import dataclass
 from time import perf_counter
 
-from .diagnostics import LogError, TraceHandler, request_trace, trace
-from .game import GameState, InvalidResponse
-from .commands import PostmatchResponse, parse_postmatch
+from ..core.diagnostics import LogError, TraceHandler, request_trace, trace
+from ..core.game import GameState, InvalidResponse
+from ..core.commands import PostmatchResponse, parse_postmatch
 from .match import MatchConfig, MatchResult, MatchStatus
-from .players import MatchPlayer, PlayerError
+from ..players.base import MatchPlayer, PlayerError
 from .requests import MAX_ATTEMPTS, RequestPolicy
 
 

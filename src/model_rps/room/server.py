@@ -8,8 +8,8 @@ import json
 from pathlib import Path
 import threading
 
-from ..game import InvalidResponse
-from ..match import MatchConfig
+from ..core.game import InvalidResponse
+from ..engine.match import MatchConfig
 from .shared import SharedRoom
 from .service import RoomService
 
