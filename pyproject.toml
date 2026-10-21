@@ -14,7 +14,7 @@ dependencies = ["httpx>=0.28,<1", "prompt-toolkit>=3.0.52,<4"]
 
 [project.optional-dependencies]
 mcp = ["mcp==2.3.0"]
-dev = ["pytest>=8", "ruff>=0.6"]
+dev = ["pytest>=8", "ruff>=0.6", "build>=1.2"]
 
 [project.scripts]
 model-rps = "model_rps.cli:main"
