@@ -2,7 +2,9 @@
 
 ## 未发布 · 共享房间与 MCP 外部玩家
 
-- 项目结构整理：共享房间模块移入 `model_rps.room`，MCP 桥接移入 `model_rps.mcp_agent`，不保留旧模块路径。命令入口更名为 `model_rps.mcp_agent.server`、`model_rps.room.server`、`model_rps.room.client`，已有 MCP 宿主配置需同步更新。验证与实验脚本移到 `validation/`、`experiments/`；新增依赖方向测试，`pyproject.toml` 增加 pytest、ruff 配置与 `dev` 可选依赖。
+- 源码重构：平铺的核心模块分入 `core`、`llm`、`players`、`engine`、`ui` 五个子包，连同新增的 `room`（共享房间）和 `mcp_agent`（MCP 桥接）共七层，依赖只能向下；不保留旧模块路径。命令入口更名为 `model_rps.mcp_agent.server`、`model_rps.room.server`、`model_rps.room.client`，调试查看器为 `model_rps.ui.debug_console`，**已有 MCP 宿主配置需同步更新并重载**。删除 `mcp_agent` 中的 `MCPPlayer` / `MCPRoom` 别名模块。
+- 目录整理：验证与实验脚本移到 `validation/`、`experiments/`，其输出写入 Git 忽略的 `artifacts/`；`logs/` 只存放对局日志。新增 `tests/test_architecture.py` 检查分层方向、包根模块和文档、示例中的点分模块路径引用；`pyproject.toml` 增加 pytest、ruff 配置与 `dev` 可选依赖。
+- 文档重组：`PROTOCOL.md`（约 50 KB）拆为 `docs/` 下的 `rules.md`、`model-io.md`、`logs-and-display.md`，并新增 `architecture.md`、`cli.md`、`shared-room.md`；`MCP.md`、`MODEL_ADAPTERS.md`、`ROADMAP.md` 移入 `docs/` 并更名。README 精简为介绍、安装与快速开始，命令行参数与排错移到 `docs/cli.md`。
 - 新增服务端管理指令 `/start`、`/stop`、`/status`、`/quit`、`/help`；双方 EXIT 后自动待机，可在同一进程连续开场。地址和 Red / Blue token 沿用，每场独立状态及日志，旧请求不能进入新场；Agent 使用原邀请获取新的 player_id，无需重配或重启 MCP。
 - 新增本机共享房间：两个独立人类终端、两个 MCP 桥接器或人类与 Agent 的组合加入同一场 BO；凭证绑定 Red / Blue，双方到齐才开赛。人类和 Agent 共用玩家接口，保留聊天、草稿与赛后退出；失联中止，不判弃权，赛后已 EXIT 的席位可先断开。
 - 新增 `--shared-room` 固定 MCP 入口，房间地址、席位凭证和玩家名称由 `rps_start` 接收；房间终端打印可直接转交的 Agent 邀请。新房间无需重配宿主。每位玩家获得独立 `player_id`，支持同一 DSH 两个对话共用 MCP 进程；后续工具显式指定玩家，缺失标识不默认读取他人状态，已有标识不能改绑。提供 DSH YAML 示例，保留旧固定房间参数。
@@ -51,6 +53,6 @@
 - 首次使用真实模型前，手动将 `config.example.toml` 复制为 `config.toml` 并填写；现有配置无需因本次升级而修改。
 - 一个终端最多一位人类玩家；本版局中接管仅支持人类交给模型。
 - 轮流行动仍为实验性模式；尚无上下文自动摘要、截断、聊天额度或自动行动期限。
-- 第三方服务的模型和参数支持以实际响应为准，已测范围见 `MODEL_ADAPTERS.md`。
+- 第三方服务的模型和参数支持以实际响应为准，已测范围见 `docs/model-adapters.md`。
 
-此前各阶段的功能摘要见 [开发计划](ROADMAP.md)。
+此前各阶段的功能摘要见 [开发计划](docs/roadmap.md)。

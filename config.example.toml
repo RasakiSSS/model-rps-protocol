@@ -132,7 +132,7 @@ profile = "deepseek"
 # 下列地址与标识是示例，不要求使用同一服务。GPT 示例为第三方兼容地址，
 # 其他示例为相应官方地址。换服务时一起核对地址、模型与密钥。
 # 适配器默认地址与 model 与下列示例相同，唯 openai 内置 model 为 gpt-6-luna。
-# 接口映射、官方资料和带日期的测试结果见 MODEL_ADAPTERS.md。
+# 接口映射、官方资料和带日期的测试结果见 docs/model-adapters.md。
 
 [profiles.gpt]
 # type = "llm"
@@ -177,7 +177,7 @@ api_key = ""
 thinking = "high"                    # low / medium / high / xhigh
 stream = false                      # 可改 true；Grok 流式自动追加缩进换行 JSON 要求
 # 该格式要求用于各阶段及重试，无需新增配置；不自动补写损坏 JSON 或降级到非流式。
-# 这是针对部分服务缺字符的兼容措施，仍可能失败；实测范围见 MODEL_ADAPTERS.md。
+# 这是针对部分服务缺字符的兼容措施，仍可能失败；实测范围见 docs/model-adapters.md。
 
 [profiles.claude]
 adapter = "anthropic"                # 原生 Messages，服务须支持对应端点及鉴权
