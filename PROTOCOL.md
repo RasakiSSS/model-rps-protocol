@@ -1,6 +1,6 @@
 # Model RPS：现行协议
 
-适用版本：v1.0.1。最后更新：2026-10-19。
+适用版本：v1.0.1 及 MCP 开发分支。最后更新：2026-10-20。
 
 本文约定裁判、玩家视图、调度与数据记录。安装、启动参数与终端操作见 [README](README.md)；配置字段与默认值见 [config.example.toml](config.example.toml)；厂商接口细节见 [MODEL_ADAPTERS.md](MODEL_ADAPTERS.md)。
 
@@ -378,6 +378,11 @@ Chat Completions 读取响应消息中非空字符串 `reasoning_content`，其�
 | 模型传输 | adapters.py、transport.py、streaming.py、anthropic.py | 厂商参数、鉴权、HTTP、SSE 与协议转换；不管理比分 |
 | 赛后交流 | postmatch.py | 内存存档、公开分析、沿用历史的聊天、沉默与退出 |
 | 前台与大厅 | cli.py、lobby.py、human_terminal.py、console.py、terminal.py | 启动组装、异步输入、本地控制与展示 |
+| 外部玩家 | external_player.py | 外部输入的统一玩家接口；复用共同调度与裁判 |
+| 房间（子包 `room/`） | base.py、shared.py、service.py、server.py、remote.py、client.py、terminal.py | 单场生命周期、席位绑定、事件游标、提交去重；本机 HTTP 玩家接口、独立人类终端；不实现游戏规则 |
+| MCP 桥接（子包 `mcp_agent/`） | server.py、room.py、player.py | stdio MCP 工具，把外部 Agent 接入单场房间或共享房间；子包名避开第三方 `mcp` SDK |
+
+依赖方向为 `mcp_agent → room → 上述核心模块`。核心模块不得导入 `room` 或 `mcp_agent`，`room` 不得导入 `mcp_agent`；`cli.py` 与 `__main__.py` 作为启动入口除外。该约束由 `tests/test_architecture.py` 检查。
 | 日志与诊断 | logs.py、diagnostics.py、context_usage.py、debug_console.py、debug_format.py、identities.py | 脱敏、私有记录、用量、观察窗口、格式化展示与席位归属 |
 | 配置与提示词 | config.py、prompts.py | 启动校验和最小规则提示；不替代裁判 |
 
@@ -386,3 +391,29 @@ Chat Completions 读取响应消息中非空字符串 `reasoning_content`，其�
 Grok 适配器在开启流式时额外要求 JSON 缩进换行、对象左花括号后换行，文字集中在 prompts.py；此约束随同一玩家的系统提示词用于对局、独立聊天、重试、接管及赛后。其他适配器和 Grok 非流式保持原有提示词。该措施只影响生成格式，不补写或修复已收到的响应；完整接收和指令校验要求不变。
 
 测试重点是信息隔离、完整响应校验、模式边界、请求取消和历史回退，以及 BO 结果、上下文生命周期、日志脱敏、流式收尾、终端交接与连续比赛。启动与测试命令见 README；后续扩展见 ROADMAP。
+
+## 13. 共享房间与 MCP 外部玩家（实验）
+
+共享房间使用常驻服务进程，每次运行一场 BO，Red / Blue 各自连接一个人类终端或 MCP 桥接器。双方到齐后才开赛。服务端窗口提供 /start、/stop、/status、/quit、/help；启动时自动开放第一场，双方 EXIT 后待机，/start 开下一场。正在等待加入、比赛或赛后聊天时不能直接 /start 覆盖，须先 /stop；停止不判弃权，保留已产生的结果和日志。管理指令不提供给玩家 HTTP / MCP 接口。
+
+MCP `--shared-room` 入口等待工具传入邀请，发现工具不会占席或创建比赛；旧 `--room-url` 固定房间入口仍兼容，连续场次须使用共享入口。独立 MCP 模式可自建比赛，对手使用模拟或模型适配器；共享入口只转发本席位指令与视图，不读取模型配置。所有方式共用原有裁判与调度。
+
+人类和 Agent 接收自己的 Player View、公共事件及赛后公开记录。接口不提供配置、密钥或对手私有日志。人类终端只在本地暂存行动草稿，聊天即时发送，ENDTURN 才提交完整行动；服务端仍统一校验。宿主可能拥有其他文件工具；本接口的信息边界不等同于操作系统防作弊隔离。
+
+共享服务仅监听 127.0.0.1，使用 JSON POST 的 info / join / state / act / wait / ping / leave 接口。随机连接凭证通过 Authorization Bearer 绑定席位，同一场每个席位只接受一个 client_id；客户端不能自行在请求中改身份。info 只返回当前场次标识和阶段，不占席、不返回玩家视图。其余请求必须带匹配的 room_id；旧场请求整体拒绝，已经进入旧场的长轮询仅返回旧场结果。正文上限 64 KiB，不开放浏览器跨域或分块请求。该 HTTP 接口承载项目玩家协议；MCP 仍通过宿主启动的 stdio 桥接器提供工具，不是远程 HTTP MCP 服务。
+
+`rps_start` 幂等启动或加入；`rps_state` 读取状态；`rps_act` 提交共同指令；`rps_wait` 等待事件。共享房间 status=not_started 时等待另一方，不可提交行动。`revision` 随状态和公共事件变化，后三者通过 `after_revision` 返回后续公共事件；省略游标从头返回。查看和等待均不推进 Tick。人类客户端使用相同的游标和提交规则，并忽略晚到的旧视图、避免重复显示公共事件。
+
+动态共享入口首次 `rps_start` 必须传入 `room_url` 和 `token`，可选 `name` 只决定显示名；席位由凭证绑定。返回的 `state.player_id` 是本玩家本场的随机访问标识；后续 state / act / wait 每次显式传入，刷新 start 时只传此标识。同一 MCP 进程可以同时承载多个对话；缺失或未知标识拒绝，不回退到其他玩家，也不提供连接枚举。错误反馈只读取当前标识对应的视图。
+
+同场重复邀请保留 player_id 和 HTTP 客户端身份，包括加入响应丢失后的重试；无效邀请可修正。同一服务端进程内 token 固定，/start 保持地址与规则，创建新的 room_id、玩家连接、事件游标、行动令牌及提交记录。用原邀请重新调用 rps_start（省略旧 player_id）获得新标识；旧标识不能改绑，不自动跟随新场。人类重新执行原连接命令。关闭并重启服务端才生成新 token。
+
+各场不继承比分、草稿或历史，使用独立日志目录；MCP 配置无需更新，不自动清除 Agent 上下文。关闭 MCP 进程释放其全部连接；关闭单个宿主对话不保证断开该玩家，玩家仍应在赛后 EXIT。MCP 重启后不恢复旧标识或已占席连接，可在服务端停止本场后新开一场。
+
+`turn_token` 绑定玩家实例、当前局、阶段、输入请求、Tick 和行动权限；跨席位或过期令牌拒绝执行。每席位的每次新提交使用独立 `action_id`，重试相同载荷复用原 ID；同 ID 改载荷会拒绝，双方相同 ID 互不影响。同批指令先整体校验，错误时没有部分执行；`accepted` 仅表示交给调度器，最终执行或结算以公共事件为准。
+
+外部玩家等待输入不使用模型 API 超时。可独立提交 SAY；完整行动用 ENDTURN 结束，没有新 MOVE 则等待，已提交的拳型保留；分析要求沿用共同校验。整场结束后才公开双方有效分析，赛后可 SAY 或 EXIT。双方退出后状态为 complete，比赛结果中的 won / undecided 与连接阶段分开记录。
+
+共享客户端每 10 秒发送心跳；主动断开或超过 90 秒失联取消未完成比赛，不判弃权。已提交赛后 EXIT 的席位可先关闭连接，仍在场的一方继续聊天或退出。思考或沉默期间只要客户端连接仍在，就不触发失联。停止本场或关闭服务会取消等待输入并唤醒事件等待者。共享房间保留最终结果到下一次 /start，旧场日志始终保留；独立 stdio 模式由宿主关闭服务。暂不支持共享房间的重连恢复或局中换人。
+
+日志由比赛所在的服务进程统一保存；人类终端不另存一份私有日志。共享房间 match_start 的 source 为 shared_room，独立 MCP 模式为 mcp；游戏输入的 request_start / request_end 区分 human 和 mcp。本项目只保存 Agent 主动提交的分析，不能读取宿主内部思考、Token 用量或清空会话。新 BO 应新建宿主会话并加入新场；同一 BO 内保留宿主上下文。接入步骤和验证边界见 [MCP.md](MCP.md)。

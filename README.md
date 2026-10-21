@@ -6,9 +6,11 @@
 [![Model adapters](https://img.shields.io/badge/model_adapters-6-6A5ACD)](MODEL_ADAPTERS.md)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-让人类与大语言模型，或两个独立的模型，在命令行中聊天、等待和出拳。Python 裁判负责规则、信息隔离和胜负判定；比赛结束后，双方沿用各自上下文继续聊天。
+让人类与人类、人类与大语言模型，或两个独立的模型，在命令行中聊天、等待和出拳。Python 裁判负责规则、信息隔离和胜负判定；比赛结束后，双方沿用各自上下文继续聊天。
 
 支持任意正奇数 BO、Red / Blue 席位、同模型对战、人类玩家、独立聊天、同时或轮流行动、局中模型接管，以及比赛之间换人。已接入 OpenAI、DeepSeek、GLM、Gemini、Grok 和 Claude 的参数方案。项目用于观察博弈行为，不预设模型必须聊天，也不把单场胜负当作能力排名。
+
+当前 `codex/mcp-agent` 分支在 `main` 基础上增加共享房间、人类双终端和可选的 MCP 外部 Agent 入口；下面的 v1.0.1 下载仍是已发布的稳定版本。
 
 **[下载 v1.0.1](https://github.com/RasakiSSS/model-rps-protocol/releases/tag/v1.0.1)** · [版本说明](CHANGELOG.md)
 
@@ -18,6 +20,7 @@
 | 启动参数、终端操作与排错 | 本文 |
 | 裁判规则、信息边界、请求与日志数据 | [PROTOCOL.md](PROTOCOL.md) |
 | 接口适配、官方资料与实测限制 | [MODEL_ADAPTERS.md](MODEL_ADAPTERS.md) |
+| Codex / Agent 通过 MCP 参赛 | [MCP.md](MCP.md) |
 | 下一版计划与尚待确定的问题 | [ROADMAP.md](ROADMAP.md) |
 | 项目许可证与第三方依赖声明 | [LICENSE](LICENSE)、[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) |
 
@@ -44,6 +47,14 @@ python3 -m venv .venv
 ```
 
 下载 ZIP 的用户从创建 `.venv` 的步骤开始。Python 启动器中的版本号按实际安装版本调整；以下示例直接调用虚拟环境，无需激活。
+
+外部 Agent 通过 MCP 参赛时安装可选依赖：
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -e ".[mcp]"
+```
+
+MCP 和 CLI 共用原有裁判。仅运行 CLI 时无需安装 MCP；Agent 接入示例见 [MCP.md](MCP.md)。
 
 **首次运行不会自动创建 config.toml。** 使用真实模型前，复制 [配置模板](config.example.toml)，然后按其中注释填写。已有配置时直接编辑，不要覆盖：
 
@@ -178,6 +189,57 @@ Red / Blue 使用对称参数。没有 API key 命令行参数，密钥按模板
 
 查看器省略 `--once` 会持续观察日志。自动开调试窗口目前仅支持 Windows，其他平台可手动在另一个终端运行查看器。
 
+### MCP 入口
+
+MCP 由宿主应用启动，不使用 `run.ps1` 或人类输入终端。安装可选依赖后，入口为 `model-rps-mcp`，也可直接指定虚拟环境 Python：
+
+```powershell
+.\.venv\Scripts\python.exe -X utf8 -m model_rps.mcp_agent.server --no-config --mode demo --bo 3
+```
+
+直接在终端运行会等待 MCP 客户端连接，不会出现玩家输入框。宿主配置示例见 [MCP 接入](MCP.md)。上面的自建比赛方式沿用通用规则、对手席位和日志参数，不支持 `--session`、`--debug`；人类或两个外部 Agent 对战使用下面的共享房间。
+
+| MCP 专用参数 | 用途 |
+| --- | --- |
+| `--agent-seat Red\|Blue` | 外部 Agent 席位，默认 Red |
+| `--agent-name 名称` | 外部 Agent 的公开名称，默认“外部 Agent” |
+| `--agent-analysis off\|optional\|required` | 外部 Agent 的分析要求，默认 required |
+
+未配置运行模式时 MCP 默认 demo；已有 `config.toml` 的运行模式仍会生效。外部 Agent 的模型和登录由宿主管理；本项目只为另一席位读取模型配置与密钥。使用真实对手时指定 `--mode live`，并以 `--blue-profile 名称`（Agent 为 Red）或 `--red-profile 名称`（Agent 为 Blue）选择对手。Agent 席位的名称、类型和分析要求由上述专用参数决定。
+
+### 共享房间入口
+
+在第一个终端启动房间，然后在另外两个终端分别执行服务打印的 Red / Blue 连接命令：
+
+```powershell
+.\.venv\Scripts\python.exe -X utf8 -m model_rps.room.server --bo 3
+```
+
+房间启动不读取 `config.toml`，双人对战无需密钥或 MCP 依赖。服务只监听本机，双方加入后开赛。两个人类均使用下文的共同指令；人类对 Agent 时，人类执行一方连接命令，只把另一方 Agent 邀请发给 Agent。Agent 使用 `--shared-room` 固定 MCP 入口，由 `rps_start` 加入，无需反复修改配置。DSH / Codex 示例见 [MCP.md](MCP.md#共享房间人类或-agent-对战)。
+
+| 入口 | 参数 |
+| --- | --- |
+| `model_rps.room.server` / `model-rps-room` | `--port` 默认 8765；`--bo` 默认 3；`--max-games`；`--initiative` 默认 simultaneous；`--move-policy` 默认 locked；`--red-analysis`、`--blue-analysis` 默认 optional；`--log-dir` 默认 logs |
+| `model_rps.room.client` / `model-rps-join` | `--room-url` 房间地址；`--token` 本席位凭证，也可用环境变量 `RPS_SEAT_TOKEN`；`--name` 玩家名称 |
+| `model_rps.mcp_agent.server --shared-room` | 推荐的固定 MCP 入口；`--agent-name` 默认 Agent，可由 `rps_start` 的 `name` 覆盖。房间地址及凭证通过加入工具传入，规则由房间决定 |
+| `model_rps.mcp_agent.server --room-url 地址` | 兼容旧固定房间用法：`--token` 或 `RPS_SEAT_TOKEN`；`--agent-name` 名称；不能与 `--shared-room` 同用 |
+
+各入口支持 `--help`。服务启动时自动开放第一场，之后在**服务端窗口**输入管理指令：
+
+| 指令 | 效果 |
+| --- | --- |
+| `/start` | 新开一场，沿用启动时的 BO 和规则；已有场次仍在等待、比赛或赛后聊天时拒绝覆盖 |
+| `/stop` | 停止当前场（包括等待加入及赛后聊天），保留日志，进入待机；不判弃权 |
+| `/status` | 查看阶段、双方加入情况、已结算比分及日志位置 |
+| `/quit` | 关闭服务并释放端口；Ctrl+C 同样关闭服务 |
+| `/help` | 显示管理指令 |
+
+双方赛后 `/exit` 后自动待机，结果保留到下一次 `/start`；下一场无需先 `/stop`。玩家退出后重新加入：人类重新执行原连接命令，Agent 使用原 `room_url`、`token` 调用 `rps_start`，省略旧 `player_id`，保存新的 `state.player_id`。**同一服务端进程内地址与两方 token 不变**，只有关闭并重新启动服务端才生成新 token。
+
+每场使用独立的比赛标识、比分、事件、行动令牌、提交记录及日志目录；旧连接不能读取或操作新场。MCP 支持同一 DSH 两个对话共用连接，每次后续工具调用均携带本场各自的 `player_id`。新 BO 使用新的 Agent 对话，避免带入上一场记忆。中途断开或失联会中止本场，之后也可 `/start`；暂不支持共享房间的局中交接、赛后 `/resume` 或重连恢复。
+
+更新项目代码后须重新加载宿主中的 RPS MCP 进程，才会使用新协议；仅新建对话不会重载 Python。连续开场本身不需要重载 MCP。管道输入支持同样的管理指令，输入流关闭后服务仍运行，需 `/quit` 或 Ctrl+C 关闭。
+
 ## 终端操作
 
 Red 标签为红色，Blue 为蓝色；交换先手不交换身份。终端不支持颜色或设置 `NO_COLOR` 时保留纯文本标签。一个终端最多一位人类玩家。
@@ -290,12 +352,14 @@ logs/日期时间_唯一编号/
 | 思考文本缺失或只有标题 | 记录服务实际返回内容；未返回不等于未执行思考，不补造内容 |
 | 赛后没有继续输出 | 查看是否进入沉默待机；按“终端操作”继续或中止 |
 | 人类模式提示终端不可用 | 在交互终端运行，避免重定向输入或输出 |
+| 共享房间凭证无效或席位已占用 | 使用本次房间打印的对应席位凭证；每席只连接一个终端或 MCP 桥接器 |
+| 共享房间一直等待加入 | 检查另一方是否连接同一地址、使用另一席位凭证；Agent 还需调用 rps_start 加入 |
 
-退出码：0 已产生冠军；3 达到局数上限但未决；1 比赛技术异常或日志故障；2 配置错误；4 赛后聊天技术异常；130 用户中止。大厅正常退出时返回最后一场的状态。
+退出码：0 已产生冠军；3 达到局数上限但未决；1 比赛技术异常或日志故障；2 配置错误；4 赛后聊天技术异常；130 用户中止。大厅正常退出时返回最后一场的状态。共享人类客户端也区分冠军、未决和技术失败，收到房间中止返回 130，无法连接或连接参数错误返回 2；房间服务本身持续运行直到关闭。
 
 ## 开发与测试
 
-源码位于 `src/model_rps/`，分层与模块职责见 [协议](PROTOCOL.md)。提示词集中在 [prompts.py](src/model_rps/prompts.py)，裁判逻辑在 [game.py](src/model_rps/game.py)；修改提示词不会改变裁判规则。
+源码位于 `src/model_rps/`：核心模块平铺在包内，共享房间在 `room/`，MCP 桥接在 `mcp_agent/`。分层、依赖方向与模块职责见 [协议](PROTOCOL.md)。验证脚本在 `validation/`，实验脚本在 `experiments/`，它们的输出写入已被 Git 忽略的 `logs/`。提示词集中在 [prompts.py](src/model_rps/prompts.py)，裁判逻辑在 [game.py](src/model_rps/game.py)；修改提示词不会改变裁判规则。
 
 以可编辑方式安装后，修改源文件无需重装；依赖变化时重新执行安装命令。
 
@@ -303,7 +367,7 @@ logs/日期时间_唯一编号/
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
-测试使用 unittest、模拟 HTTP 和异步输入，不调用真实模型。覆盖规则、权限与信息隔离、调度与取消、配置、模型适配、流式接收、日志、BO 记忆，以及人类输入、局中交接、赛后待机和连续比赛。真实服务的测试日期与边界单独记录在模型适配文档中。
+测试使用 unittest、模拟模型响应和异步输入，不调用真实模型。共享房间测试会使用本机临时端口及模拟键盘；安装 MCP 可选依赖后，还会运行真实 stdio 子进程和人类 / Agent 混合对局，未安装时跳过 SDK 相关测试。覆盖规则、权限与信息隔离、调度与取消、配置、模型适配、流式接收、日志、BO 记忆，以及人类输入、局中交接、赛后待机和连续比赛。真实服务的测试日期与边界单独记录在模型适配文档中。
 
 ## 许可证
 

@@ -1,5 +1,17 @@
 # 版本记录
 
+## 未发布 · 共享房间与 MCP 外部玩家
+
+- 项目结构整理：共享房间模块移入 `model_rps.room`，MCP 桥接移入 `model_rps.mcp_agent`，不保留旧模块路径。命令入口更名为 `model_rps.mcp_agent.server`、`model_rps.room.server`、`model_rps.room.client`，已有 MCP 宿主配置需同步更新。验证与实验脚本移到 `validation/`、`experiments/`；新增依赖方向测试，`pyproject.toml` 增加 pytest、ruff 配置与 `dev` 可选依赖。
+- 新增服务端管理指令 `/start`、`/stop`、`/status`、`/quit`、`/help`；双方 EXIT 后自动待机，可在同一进程连续开场。地址和 Red / Blue token 沿用，每场独立状态及日志，旧请求不能进入新场；Agent 使用原邀请获取新的 player_id，无需重配或重启 MCP。
+- 新增本机共享房间：两个独立人类终端、两个 MCP 桥接器或人类与 Agent 的组合加入同一场 BO；凭证绑定 Red / Blue，双方到齐才开赛。人类和 Agent 共用玩家接口，保留聊天、草稿与赛后退出；失联中止，不判弃权，赛后已 EXIT 的席位可先断开。
+- 新增 `--shared-room` 固定 MCP 入口，房间地址、席位凭证和玩家名称由 `rps_start` 接收；房间终端打印可直接转交的 Agent 邀请。新房间无需重配宿主。每位玩家获得独立 `player_id`，支持同一 DSH 两个对话共用 MCP 进程；后续工具显式指定玩家，缺失标识不默认读取他人状态，已有标识不能改绑。提供 DSH YAML 示例，保留旧固定房间参数。
+- 新增可选 stdio MCP 服务：外部 Agent 占据 Red 或 Blue，对战模拟或已配置的 API 玩家；每个服务进程运行一场 BO。
+- 提供开始、查看、提交、等待四个工具；复用现有规则、信息权限、日志和赛后聊天。提交校验行动令牌并按 action_id 去重，公共事件按游标增量返回。
+- 等待新消息不消耗行动次数；未退出的宿主断开时取消比赛和待处理请求。宿主的内部思考、登录和会话记忆不由本项目管理。
+- 从 main 新建独立 MCP 分支，复用原有裁判与调度；可选依赖仅为 MCP SDK，保留其原始许可声明。
+- Codex 工具流程已在前期原型验证；当前分支重新验证原有裁判下的完整 stdio 对局。DeepSeek Harness 尚待接入验证。
+
 ## v1.0.1 · 2026-10-19
 
 - 项目自身采用 MIT License，版权署名为 RasakiSSS。
