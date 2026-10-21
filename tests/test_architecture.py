@@ -1,5 +1,7 @@
 """Guard the module layering: a package may only import from layers below it."""
 import ast
+import importlib.util
+import re
 import unittest
 from pathlib import Path
 
@@ -71,6 +73,24 @@ class ArchitectureTests(unittest.TestCase):
             for imported in imported_modules(PACKAGE / f'{name}.py'):
                 self.assertNotIn(target_of(imported), {'room', 'mcp_agent', 'ui', 'engine'},
                                  f'{name}.py imports {imported}')
+
+    def test_dotted_module_strings_point_to_real_modules(self):
+        """String references such as `-m model_rps.x` bypass import checks, so verify them separately."""
+        pattern = re.compile(r'\bmodel_rps(?:\.[A-Za-z_]\w*)+')
+        sources = [*PACKAGE.rglob('*.py'), *(PACKAGE.parents[1] / 'examples').glob('*.yml'),
+                   *PACKAGE.parents[1].glob('*.md'), *(PACKAGE.parents[1] / 'docs').rglob('*.md')]
+        for path in sources:
+            for name in set(pattern.findall(path.read_text(encoding='utf-8'))):
+                # Accept a module path followed by attribute names, e.g. model_rps.cli.main.
+                parts = name.split('.')
+                for end in range(len(parts), 1, -1):
+                    try:
+                        if importlib.util.find_spec('.'.join(parts[:end])) is not None:
+                            break
+                    except (ImportError, ValueError):
+                        continue
+                else:
+                    self.fail(f'{path.name} references unknown module {name}')
 
 
 if __name__ == '__main__':

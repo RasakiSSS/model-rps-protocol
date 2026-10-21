@@ -19,7 +19,7 @@ def open_debug_window(logs):
         if sys.platform != "win32":
             raise OSError("unsupported platform")
         process = subprocess.Popen(
-            [sys.executable, "-m", "model_rps.debug_console", str(logs.path.resolve()),
+            [sys.executable, "-m", "model_rps.ui.debug_console", str(logs.path.resolve()),
              "--parent", str(os.getpid()), "--window"],
             creationflags=subprocess.CREATE_NEW_CONSOLE, close_fds=True,
         )

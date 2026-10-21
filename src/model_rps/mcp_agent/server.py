@@ -14,7 +14,7 @@ from ..core.commands import AnalysisPolicy
 from ..config import CONFIG_PATH, RuntimeConfig, load_config, text_value
 from ..core.game import MAX_TICKS, InvalidResponse
 from ..engine.match import MatchConfig
-from .room import MCPRoom
+from ..room.base import Room
 from ..player_factory import model_player, player_keys
 from ..players.base import demo_players
 from ..core.prompts import MCP_INSTRUCTIONS, MOVE_RULES
@@ -176,7 +176,7 @@ def make_room(argv=None):
             async with httpx.AsyncClient(timeout=settings.timeout_seconds, follow_redirects=False) as client:
                 yield model_player(client, settings, opponent, key, room.names)
 
-    room = MCPRoom(open_opponent, config=match, policy=RequestPolicy(settings.timeout_seconds, settings.retry_delay_seconds),
+    room = Room(open_opponent, config=match, policy=RequestPolicy(settings.timeout_seconds, settings.retry_delay_seconds),
                    identity=identity, name=args.agent_name, analysis=args.agent_analysis,
                    opponent_name=opponent.display_name if settings.mode == "live" else "模拟对手",
                    log_dir=settings.log_dir, secrets=tuple(p.api_key for p in settings.seats if p.api_key) + ((key,) if key else ()))

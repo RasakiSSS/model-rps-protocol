@@ -12,8 +12,8 @@ from unittest.mock import patch
 from fixtures import turn_payload
 from model_rps.core.game import GameState, InvalidResponse
 from model_rps.engine.match import MatchConfig
-from model_rps.mcp_agent.player import MCPPlayer
-from model_rps.mcp_agent.room import MCPRoom
+from model_rps.players.external import ExternalPlayer
+from model_rps.room.base import Room
 from model_rps.mcp_agent.server import create_server, make_room
 from model_rps.players.base import ScriptedPlayer
 from model_rps.room.remote import RemoteRoom, RoomConnector
@@ -56,7 +56,7 @@ class MCPTests(unittest.IsolatedAsyncioTestCase):
             finally:
                 self.peer_closed = True
 
-        room = MCPRoom(opponent, log_dir=self.temp.name, **kwargs)
+        room = Room(opponent, log_dir=self.temp.name, **kwargs)
         self.addAsyncCleanup(room.close)
         return room
 
@@ -146,7 +146,7 @@ class MCPTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.peer_closed)
 
     async def test_stale_token_rejected_when_pending_input_changes_tick_or_permission(self):
-        player = MCPPlayer(analysis='optional')
+        player = ExternalPlayer(analysis='optional')
         player.start_game({'game': 1})
         view = replace(GameState().view_for('B'), can_act=False, request_id=7)
         player.update_view(view)
