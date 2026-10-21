@@ -36,7 +36,7 @@ async def main():
         return text
     spec = configure_thinking(replace(MODEL_ADAPTERS['grok'], model=profile['model'],
                                       base_url=profile['base_url']), profile.get('thinking', 'high'))
-    output = Path(__file__).resolve().parents[2] / 'logs' / '_grok_validation' / datetime.now().strftime('%Y%m%d_%H%M%S_%f')
+    output = Path(__file__).resolve().parents[2] / 'artifacts' / 'grok_validation' / datetime.now().strftime('%Y%m%d_%H%M%S_%f')
     output.mkdir()
     def save(name, value):
         text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, indent=2)

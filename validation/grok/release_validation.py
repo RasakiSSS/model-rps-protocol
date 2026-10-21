@@ -69,7 +69,7 @@ async def main():
         player = ChatCompletionPlayer(client, spec, p['api_key'], stream=True, names=names,
                                       max_output_tokens=20000, stream_first_timeout=60, stream_idle_timeout=30)
         peer = Peer()
-        with RunLogs(Path(__file__).resolve().parents[2] / 'logs' / '_grok_validation' / 'v0.11.1', names=names,
+        with RunLogs(Path(__file__).resolve().parents[2] / 'artifacts' / 'grok_validation' / 'v0.11.1', names=names,
                      secrets=tuple(x.get('api_key', '') for x in config['profiles'].values())) as logs:
             print('Evidence directory:', logs.path, flush=True)
             archive = MatchArchive()

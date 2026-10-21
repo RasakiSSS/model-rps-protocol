@@ -31,4 +31,5 @@ tmp*/
 pip-*/
 .pytest_tmp/
 
-# Validation and experiment scripts are tracked; their outputs live in logs/
+# Validation and experiment scripts are tracked; their outputs live in artifacts/
+artifacts/

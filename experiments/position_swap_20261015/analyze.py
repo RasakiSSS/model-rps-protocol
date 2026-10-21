@@ -7,7 +7,7 @@ import sys
 
 from experiment import flip_messages
 
-ROOT = Path(__file__).resolve().parents[2] / 'logs' / 'experiments' / 'position_swap_20261015'
+ROOT = Path(__file__).resolve().parents[2] / 'artifacts' / 'experiments' / 'position_swap_20261015'
 RUN = Path((ROOT / 'latest.txt').read_text(encoding='utf-8'))
 results = [json.loads(s) for s in (RUN / 'results.jsonl').read_text(encoding='utf-8').splitlines()]
 cases = json.loads((RUN / 'inputs.json').read_text(encoding='utf-8'))

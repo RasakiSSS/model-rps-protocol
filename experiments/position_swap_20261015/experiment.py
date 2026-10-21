@@ -17,7 +17,7 @@ from model_rps.core.game import parse_decision
 from model_rps.core.logs import RunLogs
 from model_rps.players.base import ChatCompletionPlayer, DEEPSEEK, OPENAI, PlayerError, configure_thinking
 
-ROOT = Path(__file__).resolve().parents[2] / 'logs' / 'experiments' / 'position_swap_20261015'
+ROOT = Path(__file__).resolve().parents[2] / 'artifacts' / 'experiments' / 'position_swap_20261015'
 SOURCE = Path('logs/20261015_014708_111317_5bbf4e82')
 LABEL = re.compile(r'(?<![A-Za-z])([AB])(?![A-Za-z])')
 
