@@ -1,6 +1,6 @@
 # 版本记录
 
-## 未发布 · 共享房间与 MCP 外部玩家
+## v1.1.0 · 2026-10-21 · 共享房间与 MCP 外部玩家
 
 - 源码重构：平铺的核心模块分入 `core`、`llm`、`players`、`engine`、`ui` 五个子包，连同新增的 `room`（共享房间）和 `mcp_agent`（MCP 桥接）共七层，依赖只能向下；不保留旧模块路径。命令入口更名为 `model_rps.mcp_agent.server`、`model_rps.room.server`、`model_rps.room.client`，调试查看器为 `model_rps.ui.debug_console`，**已有 MCP 宿主配置需同步更新并重载**。删除 `mcp_agent` 中的 `MCPPlayer` / `MCPRoom` 别名模块。
 - 目录整理：验证与实验脚本移到 `validation/`、`experiments/`，其输出写入 Git 忽略的 `artifacts/`；`logs/` 只存放对局日志。新增 `tests/test_architecture.py` 检查分层方向、包根模块和文档、示例中的点分模块路径引用；`pyproject.toml` 增加 pytest、ruff 配置与 `dev` 可选依赖。

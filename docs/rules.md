@@ -1,6 +1,6 @@
 # 游戏规则与信息边界
 
-适用版本：v1.0.1 及 `codex/mcp-agent` 开发分支。
+适用版本：v1.1.0。
 
 本文约定裁判、玩家视图、调度与 BO 生命周期：谁能看到什么、一个 Tick 如何推进、指令如何校验、比赛何时结束。模型收到的消息格式、重试和赛后聊天见 [模型交互](model-io.md)，日志与展示见 [日志与展示](logs-and-display.md)，代码分层见 [架构](architecture.md)。安装与启动见 [README](../README.md)，配置字段见 [config.example.toml](../config.example.toml)。
 

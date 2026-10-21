@@ -1,6 +1,6 @@
 # Model RPS
 
-[![Release](https://img.shields.io/badge/release-v1.0.1-blue)](https://github.com/RasakiSSS/model-rps-protocol/releases/tag/v1.0.1)
+[![Release](https://img.shields.io/badge/release-v1.1.0-blue)](https://github.com/RasakiSSS/model-rps-protocol/releases/tag/v1.1.0)
 [![Python](https://img.shields.io/badge/python-3.12%2B-3776AB)](pyproject.toml)
 [![Interface](https://img.shields.io/badge/interface-CLI-4B8BBE)](docs/cli.md#终端操作)
 [![Model adapters](https://img.shields.io/badge/model_adapters-6-6A5ACD)](docs/model-adapters.md)
@@ -10,9 +10,9 @@
 
 支持任意正奇数 BO、Red / Blue 席位、同模型对战、人类玩家、独立聊天、同时或轮流行动、局中模型接管，以及比赛之间换人。已接入 OpenAI、DeepSeek、GLM、Gemini、Grok 和 Claude 的参数方案。项目用于观察博弈行为，不预设模型必须聊天，也不把单场胜负当作能力排名。
 
-当前 `codex/mcp-agent` 分支在 `main` 基础上增加共享房间、人类双终端和可选的 MCP 外部 Agent 入口；下面的 v1.0.1 下载仍是已发布的稳定版本。
+v1.1.0 增加本机共享房间、人类双终端和可选的 MCP 外部 Agent 入口，源码按职责分为七层；模块与入口路径相对 v1.0.1 有变化，升级前请看版本说明。
 
-**[下载 v1.0.1](https://github.com/RasakiSSS/model-rps-protocol/releases/tag/v1.0.1)** · [版本说明](CHANGELOG.md)
+**[下载 v1.1.0](https://github.com/RasakiSSS/model-rps-protocol/releases/tag/v1.1.0)** · [版本说明](CHANGELOG.md)
 
 ## 文档
 
