@@ -73,7 +73,7 @@ class Console:
         elif event.kind in ("reminder", "settlement_pending", "handoff"):
             self.write(f"System：{display_text(event.text)}")
 
-    def result(self, state: GameState) -> None:
+    def result(self, state: GameState) -> str:
         result = state.result
         if result is None:
             raise ValueError("对局尚未结束。")
@@ -92,4 +92,6 @@ class Console:
             moves = '；'.join(f"{self.names[player]} → {GESTURE_NAMES[move] if move is not None else '未出拳'}"
                              for player, move in zip(('A', 'B'), state.moves))
             text = f'{moves}；{text}'
-        self.write(f"System：{text}")
+        line = f"System：{text}"
+        self.write(line)
+        return line

@@ -1,6 +1,6 @@
 # 第三方依赖与许可声明
 
-核查日期：2026-10-19。本项目自身采用 [MIT License](LICENSE)，第三方组件保留各自的版权和许可条款。
+核查日期：2026-10-20。本项目自身采用 [MIT License](LICENSE)，第三方组件保留各自的版权和许可条款。
 
 本项目通过 Python 包接口使用下面的依赖。当前 GitHub 源码包和本项目 wheel 不内置这些库的实现、Python 解释器或模型权重；安装时由包管理器另行获取依赖。以下清单记录已核查的发行版本，不作为依赖锁定文件。升级、启用额外依赖或制作包含依赖的安装包时，应按实际版本更新清单和声明。
 
@@ -24,6 +24,12 @@ prompt-toolkit 两个版本的许可与作者文件内容一致。
 | [h11](https://github.com/python-hyper/h11) | 0.16.0 | HTTPCore | MIT；[声明](LICENSES/h11-LICENSE.txt) |
 | [wcwidth](https://github.com/jquast/wcwidth) | 0.9.2 | prompt-toolkit | MIT，并保留上游 Markus Kuhn 的许可；[完整声明](LICENSES/wcwidth-LICENSE) |
 | [typing_extensions](https://github.com/python/typing_extensions) | 4.16.0 | AnyIO，在 Python < 3.15 时需要 | PSF-2.0；[完整声明及历史许可](LICENSES/typing_extensions-LICENSE) |
+
+## 可选 MCP 服务
+
+`.[mcp]` 安装 [官方 Python SDK](https://github.com/modelcontextprotocol/python-sdk) 的 mcp 2.3.0，同时带入 mcp-types 2.3.0。本项目调用 SDK 的工具注册、生命周期与 stdio 传输接口，没有复制其实现；两个发行包的 MIT 许可文件内容一致，保留[原始版权与许可](LICENSES/mcp-LICENSE)。
+
+SDK 的传递依赖由包管理器另行安装；本项目不内置 SDK、其依赖或 Agent 宿主。这里记录直接使用的可选组件，未扩展为全部传递依赖的许可清单。未来分发包含这些依赖的安装包时，应按实际包含版本核查并保留各自声明。
 
 ## 构建工具与运行环境
 

@@ -1,0 +1,17 @@
+# DSH MCP 固定配置：仅需按实际安装位置修改 command 和 cwd。
+# 桌面版：将此补丁合并到 $DSH_HOME/profiles/desktop/cordis.patch.yml。
+# Web 版：在项目目录运行 dsh web --patch ./examples/dsh-rps.cordis.yml。
+# 每次开房后，把自己这一方的 Agent 邀请发给 Agent，由 rps_start 加入。
+# 服务端 /start 下一场沿用邀请；重新调用 rps_start 时省略旧 player_id，保存新的标识。
+# 升级源码后需重载 RPS MCP 进程；普通连续开场不需重载。
+# 同一 DSH 可用两个对话参赛；每方保存自己的 state.player_id，后续工具调用均携带它。
+# 房间地址、席位 token 和模型 API key 均不需要写在此配置中。
+- insert:
+    - id: mcp-rps
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: rps
+        transport: stdio
+        command: 'Z:\DSH_Home\model-rps-protocol\.venv\Scripts\python.exe'
+        args: ['-X', 'utf8', '-m', 'model_rps.mcp_agent.server', '--shared-room']
+        cwd: 'Z:\DSH_Home\model-rps-protocol'

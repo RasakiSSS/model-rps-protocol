@@ -69,11 +69,12 @@ async def request_interaction(player: Player, view: PlayerView, policy: RequestP
         # 输入错误在终端逐条提示；等待用户不使用 API 超时或重试预算。
         submission = await player.respond(view)
         view = submission.view
+        source = getattr(player, "input_source", "human")
         with request_trace(on_request, player=view.player, tick=view.tick, attempt=1,
                            phase="game" if view.can_act else "chat", request_id=view.request_id):
-            trace("request_start", state=view.to_dict(), correction=None, source="human")
+            trace("request_start", state=view.to_dict(), correction=None, source=source)
             result = validated_response(player, view, submission.content)
-            trace("request_end", status="valid", source="human")
+            trace("request_end", status="valid", source=source)
             return result
     feedback = None
     for attempt in range(1, MAX_ATTEMPTS + 1):
